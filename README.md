@@ -45,6 +45,23 @@ python -m ccee.pipeline baixar --todos   :: inclui histórico (≈1.000 arquivos
 | Retomar | Cada etapa só processa o que falta. Se cair no meio, rode de novo. Execuções interrompidas ficam marcadas no histórico. |
 | Alertas | Inconsistências do próprio site, por exemplo um título que diz "Versão 7.0" com link para o arquivo v6.0. |
 
+### Aviso de versão nova pelo Diário Oficial
+
+Versões novas de PdCs e Regras são aprovadas pela ANEEL, e o ato sai no Diário Oficial da União. O monitor
+lê o DOU pelo **INLABS**, o serviço oficial da Imprensa Nacional para download automatizado, e lista no painel
+(aba **📰 Diário Oficial**) os atos que citam "Procedimentos de Comercialização" ou "Regras de Comercialização".
+
+1. Crie uma conta gratuita em https://inlabs.in.gov.br.
+2. Crie o arquivo `dados\inlabs.txt` com duas linhas (ele fica só no seu PC; a pasta `dados` não vai para o GitHub):
+   ```
+   email=seu_email
+   senha=sua_senha
+   ```
+3. Clique em **📰 Verificar Diário Oficial** (ou `python -m ccee.monitor_dou`). Na primeira vez ele lê os
+   últimos 30 dias; depois, só os dias que faltam.
+
+Para rodar todo dia, agende no Agendador de Tarefas: `<pasta>\.venv\Scripts\python.exe -m ccee.monitor_dou`.
+
 ### Onde ficam os dados
 
 ```

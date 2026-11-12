@@ -56,13 +56,13 @@ def em_andamento() -> bool:
     return config.TRAVA.exists() and not ler("SELECT id FROM execucoes WHERE status='rodando'").empty
 
 
-def disparar(args: list[str]) -> Path:
+def disparar(args: list[str], modulo: str = "ccee.pipeline") -> Path:
     PASTA_LOGS.mkdir(parents=True, exist_ok=True)
     log = PASTA_LOGS / f"coleta_{datetime.now():%Y%m%d_%H%M%S}.log"
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
     with open(log, "w", encoding="utf-8") as f:
         subprocess.Popen(
-            [sys.executable, "-m", "ccee.pipeline", *args],
+            [sys.executable, "-m", modulo, *args],
             cwd=config.RAIZ, stdout=f, stderr=subprocess.STDOUT, creationflags=flags,
             env={**__import__("os").environ, "PYTHONIOENCODING": "utf-8"},
         )
@@ -101,6 +101,14 @@ with st.sidebar:
     if st.button("📥 Importar PDFs da pasta", disabled=rodando, width="stretch"):
         config.PASTA_ENTRADA.mkdir(parents=True, exist_ok=True)
         st.session_state["log"] = str(disparar(["importar"]))
+        st.rerun()
+
+    st.divider()
+    st.caption("Aviso de versão nova (Diário Oficial)")
+    st.markdown("Lê o DOU pelo INLABS e avisa quando sai ato da ANEEL sobre PdCs ou Regras. "
+                f"Precisa do arquivo `{config.INLABS_CREDENCIAIS}` com `email=` e `senha=`.")
+    if st.button("📰 Verificar Diário Oficial", disabled=rodando, width="stretch"):
+        st.session_state["log"] = str(disparar([], modulo="ccee.monitor_dou"))
         st.rerun()
 
     st.divider()
@@ -168,7 +176,22 @@ def visao_ao_vivo():
 
 visao_ao_vivo()
 
-aba_docs, aba_alertas, aba_exec, aba_evt = st.tabs(["📄 Documentos", "⚠️ Alertas e erros", "🕓 Execuções", "📜 Eventos"])
+aba_docs, aba_dou, aba_alertas, aba_exec, aba_evt = st.tabs(
+    ["📄 Documentos", "📰 Diário Oficial", "⚠️ Alertas e erros", "🕓 Execuções", "📜 Eventos"])
+
+with aba_dou:
+    st.caption("Atos publicados no DOU que mencionam Procedimentos ou Regras de Comercialização. "
+               "Quando aparecer uma versão nova, baixe o arquivo no site da CCEE e use **Importar**.")
+    av = ler("SELECT data, tipo, identifica, assunto, ementa, trecho, url, orgao FROM dou_avisos ORDER BY data DESC")
+    ed = ler("SELECT MAX(data) AS ate, COUNT(*) AS n FROM dou_edicoes WHERE status='lida'")
+    if not ed.empty and ed.n.iloc[0]:
+        st.caption(f"Edições lidas: {int(ed.n.iloc[0])} · até {ed.ate.iloc[0]}")
+    if av.empty:
+        st.info("Nenhum ato encontrado ainda. Clique em **Verificar Diário Oficial** na barra lateral.")
+    else:
+        st.dataframe(av, width="stretch", hide_index=True, column_config={
+            "url": st.column_config.LinkColumn("Ver no DOU"), "data": "Data", "tipo": "Tipo",
+            "identifica": "Ato", "assunto": "Assunto", "ementa": "Ementa", "trecho": "Trecho", "orgao": "Órgão"})
 
 with aba_docs:
     docs = ler("SELECT * FROM documentos ORDER BY fonte, codigo, publicado_em DESC")

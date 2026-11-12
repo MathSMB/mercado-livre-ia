@@ -67,6 +67,30 @@ CREATE TABLE IF NOT EXISTS eventos (
     em            TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_evt_exec ON eventos(execucao_id);
+
+-- Monitor do Diário Oficial: cada edição (data + seção) lida e cada ato encontrado
+CREATE TABLE IF NOT EXISTS dou_edicoes (
+    data      TEXT NOT NULL,      -- AAAA-MM-DD
+    secao     TEXT NOT NULL,      -- DO1, DO1E...
+    status    TEXT NOT NULL,      -- lida | sem_edicao | erro
+    materias  INTEGER,
+    lida_em   TEXT NOT NULL,
+    PRIMARY KEY (data, secao)
+);
+CREATE TABLE IF NOT EXISTS dou_avisos (
+    id          TEXT PRIMARY KEY, -- idMateria do DOU
+    data        TEXT NOT NULL,
+    secao       TEXT,
+    tipo        TEXT,             -- Resolução Normativa, Despacho...
+    orgao       TEXT,
+    identifica  TEXT,
+    ementa      TEXT,
+    assunto     TEXT,             -- PdC | Regras | PdC e Regras
+    trecho      TEXT,
+    url         TEXT,
+    visto       INTEGER NOT NULL DEFAULT 0,
+    encontrado_em TEXT NOT NULL
+);
 """
 
 
