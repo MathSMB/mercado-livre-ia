@@ -13,5 +13,6 @@ if not exist ".venv\Scripts\python.exe" (
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt || (echo Falha ao instalar dependencias. & pause & exit /b 1)
 )
 echo Abrindo o painel em http://localhost:8501 ...
-".venv\Scripts\python.exe" -m streamlit run painel.py
+start "" /min cmd /c "timeout /t 5 >nul & start http://localhost:8501"
+".venv\Scripts\python.exe" -m streamlit run painel.py --server.headless true
 pause
