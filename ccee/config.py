@@ -32,3 +32,12 @@ TIMEOUT_SEGUNDOS = 60
 ITENS_POR_PAGINA = 100
 MAX_PAGINAS = 50              # trava de segurança da paginação
 USER_AGENT = "base-ccee-coletor/0.1 (uso interno; coleta de documentos publicos)"
+
+# Monitor do Diário Oficial (INLABS, serviço oficial da Imprensa Nacional para download automatizado)
+# Credenciais: arquivo dados/inlabs.txt com duas linhas "email=..." e "senha=..." (fica só no seu PC)
+# ou variáveis de ambiente INLABS_EMAIL e INLABS_SENHA.
+INLABS_LOGIN = "https://inlabs.in.gov.br/logar.php"
+INLABS_DOWNLOAD = "https://inlabs.in.gov.br/index.php?p="
+INLABS_CREDENCIAIS = DADOS / "inlabs.txt"
+DOU_SECOES = ["DO1", "DO1E"]   # atos da ANEEL saem na Seção 1 (e edições extras)
+DOU_DIAS_INICIAIS = 30          # na primeira vez, olha os últimos N dias
