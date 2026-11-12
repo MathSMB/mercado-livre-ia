@@ -3,6 +3,7 @@
     python -m ccee.pipeline descobrir     # lê o site e atualiza o catálogo
     python -m ccee.pipeline baixar        # baixa o que está pendente (retoma de onde parou)
     python -m ccee.pipeline tudo          # descobrir + baixar
+    python -m ccee.pipeline importar      # cataloga os PDFs baixados à mão em dados/entrada
     python -m ccee.pipeline status        # resumo no terminal
 
 Opções: --todos (inclui histórico e itens fora do escopo no download),
@@ -14,11 +15,13 @@ import argparse
 import os
 import sys
 from collections import Counter
+from pathlib import Path
 
 from . import config, db
 from .descoberta import descobrir_pdcs, descobrir_regras
 from .download import baixar
 from .http import Cliente
+from .importar import importar_pasta
 
 
 class Trava:
@@ -128,12 +131,12 @@ def etapa_baixar(con, cliente, exec_id, log, todos=False, limite=None, reprocess
     return c
 
 
-def executar(comando: str, todos=False, limite=None, reprocessar_erros=False, log=print) -> int:
+def executar(comando: str, todos=False, limite=None, reprocessar_erros=False, log=print, pasta=None) -> int:
     con = db.conectar()
     with Trava():
         _marcar_interrompidas(con)
         exec_id = db.iniciar_execucao(con, comando + (" --todos" if todos else ""))
-        cliente = Cliente()
+        cliente = None if comando == "importar" else Cliente()
         resumo: Counter = Counter()
         status = "ok"
         try:
@@ -141,6 +144,10 @@ def executar(comando: str, todos=False, limite=None, reprocessar_erros=False, lo
                 resumo += etapa_descobrir(con, cliente, exec_id, log)
             if comando in ("baixar", "tudo"):
                 resumo += etapa_baixar(con, cliente, exec_id, log, todos, limite, reprocessar_erros)
+            if comando == "importar":
+                destino = pasta or config.PASTA_ENTRADA
+                destino.mkdir(parents=True, exist_ok=True)
+                resumo += importar_pasta(con, exec_id, destino, log)
             if resumo.get("erros") or resumo.get("falhas_fonte"):
                 status = "com_erros"
         except KeyboardInterrupt:
@@ -167,15 +174,17 @@ def status_texto() -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m ccee.pipeline", description="Coletor da base CCEE")
-    ap.add_argument("comando", choices=["descobrir", "baixar", "tudo", "status"])
+    ap.add_argument("comando", choices=["descobrir", "baixar", "tudo", "importar", "status"])
     ap.add_argument("--todos", action="store_true", help="baixa também histórico e itens fora do escopo")
     ap.add_argument("--limite", type=int, help="baixa no máximo N arquivos")
     ap.add_argument("--reprocessar-erros", action="store_true", help="tenta de novo os que falharam")
+    ap.add_argument("--pasta", help="pasta com os PDFs para importar (padrão: dados/entrada)")
     a = ap.parse_args(argv)
     if a.comando == "status":
         print(status_texto())
         return 0
-    return executar(a.comando, a.todos, a.limite, a.reprocessar_erros, log=lambda m: print(m, flush=True))
+    return executar(a.comando, a.todos, a.limite, a.reprocessar_erros, log=lambda m: print(m, flush=True),
+                    pasta=Path(a.pasta) if a.pasta else None)
 
 
 if __name__ == "__main__":

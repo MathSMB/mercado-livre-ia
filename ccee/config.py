@@ -8,6 +8,7 @@ RAIZ = Path(__file__).resolve().parent.parent
 # Pasta de dados: pode ser trocada pela variável de ambiente BASE_CCEE_DADOS
 DADOS = Path(os.environ.get("BASE_CCEE_DADOS", RAIZ / "dados"))
 PASTA_PDF = DADOS / "pdf"            # arquivos originais baixados
+PASTA_ENTRADA = DADOS / "entrada"    # PDFs baixados à mão, para o comando "importar"
 PASTA_MARKDOWN = DADOS / "markdown"  # (próxima fase) conversões
 PASTA_TRECHOS = DADOS / "trechos"    # (próxima fase) chunks + metadados
 PASTA_EXPORTAR = DADOS / "exportar"  # (próxima fase) pacote para SharePoint/Azure

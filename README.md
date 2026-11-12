@@ -16,6 +16,11 @@ sem servidor e sem custo.
    (alguns minutos). Depois abre o painel no navegador em http://localhost:8501.
 3. No painel, clique em **Descobrir + baixar**.
 
+> **Importante (nov/2026):** o site da CCEE responde **403 (proibido)** a programas automáticos, então
+> **Descobrir** e **Baixar** podem falhar. Nesse caso, baixe os PDFs pelo seu navegador (sem renomear),
+> coloque em `dados\entrada\` e clique em **📥 Importar PDFs da pasta**. O coletor não tenta contornar
+> o bloqueio.
+
 Pelo terminal (opcional):
 
 ```bat
@@ -23,6 +28,7 @@ Pelo terminal (opcional):
 python -m ccee.pipeline descobrir        :: lê o site e atualiza o catálogo
 python -m ccee.pipeline baixar           :: baixa os pendentes (retoma de onde parou)
 python -m ccee.pipeline tudo             :: as duas coisas
+python -m ccee.pipeline importar         :: cataloga os PDFs que você pôs em dados\entrada
 python -m ccee.pipeline status           :: resumo
 python -m ccee.pipeline baixar --todos   :: inclui histórico (≈1.000 arquivos)
 ```

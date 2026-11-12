@@ -95,6 +95,15 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+    st.caption("Importar PDFs baixados à mão")
+    st.markdown(f"O site da CCEE bloqueia coleta automática (HTTP 403). Baixe os arquivos pelo seu navegador, "
+                f"sem renomear, e coloque em `{config.PASTA_ENTRADA}`.")
+    if st.button("📥 Importar PDFs da pasta", disabled=rodando, width="stretch"):
+        config.PASTA_ENTRADA.mkdir(parents=True, exist_ok=True)
+        st.session_state["log"] = str(disparar(["importar"]))
+        st.rerun()
+
+    st.divider()
     st.caption("Onde os dados ficam")
     st.markdown(f"**Arquivos:** `{config.PASTA_PDF}`  \n**Banco:** `{config.BANCO}`  \n**Logs:** `{PASTA_LOGS}`")
     st.caption(f"Fontes: [Regras]({config.URL_REGRAS}) · [PdCs]({config.URL_PDCS})")

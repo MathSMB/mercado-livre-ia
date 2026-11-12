@@ -1,5 +1,6 @@
 """Testes do coletor com dados no formato real do site (sem acessar a internet)."""
 import hashlib
+from pathlib import Path
 from datetime import date
 
 import pytest
@@ -185,3 +186,26 @@ def test_execucao_interrompida_fica_registrada(banco, monkeypatch):
     pipeline.executar("descobrir", log=lambda m: None)
     status = [r["status"] for r in con.execute("SELECT status FROM execucoes ORDER BY id")]
     assert status[0] == "interrompida"
+
+
+def test_importar_pdfs_baixados_a_mao(banco, tmp_path):
+    from ccee import importar
+    entrada = tmp_path / "entrada"
+    entrada.mkdir()
+    (entrada / "05 - Contratos_2026.6.4_JUN.pdf").write_bytes(b"%PDF-1.7 caderno 05")
+    (entrada / "1.6_-_Comercializacao_varejista_v6.0.pdf").write_bytes(b"%PDF-1.7 pdc 1.6")
+    (entrada / "pagina.pdf").write_bytes(b"<html>bloqueado</html>")  # página de erro salva como PDF
+    con = db.conectar()
+    eid = db.iniciar_execucao(con, "importar")
+    c = importar.importar_pasta(con, eid, entrada, log=lambda m: None)
+    assert c["importados_novo"] == 2 and c["erros"] == 1
+    docs = {r["id"]: dict(r) for r in con.execute("SELECT * FROM documentos")}
+    r05, p16 = docs["regras:05:importado"], docs["pdc:1.6:importado"]
+    assert (r05["versao"], r05["etapa"], r05["selecionado"]) == ("2026.6.4", "baixado", 1)
+    assert p16["titulo"] == "Submódulo 1.6 - Comercializacao varejista" and p16["versao"] == "6.0"
+    assert Path(p16["caminho_local"]).read_bytes() == b"%PDF-1.7 pdc 1.6"
+    # importar de novo o mesmo arquivo não duplica; versão nova substitui e guarda as duas no disco
+    assert importar.importar_pasta(con, eid, entrada, log=lambda m: None)["importados_igual"] == 2
+    (entrada / "1.6_-_Comercializacao_varejista_v6.0.pdf").write_bytes(b"%PDF-1.7 pdc 1.6 corrigido")
+    assert importar.importar_pasta(con, eid, entrada, log=lambda m: None)["importados_alterado"] == 1
+    assert len(list((tmp_path / "pdf" / "pdc" / "1.6").glob("*.pdf"))) == 2
