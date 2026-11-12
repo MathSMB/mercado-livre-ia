@@ -209,3 +209,20 @@ def test_importar_pdfs_baixados_a_mao(banco, tmp_path):
     (entrada / "1.6_-_Comercializacao_varejista_v6.0.pdf").write_bytes(b"%PDF-1.7 pdc 1.6 corrigido")
     assert importar.importar_pasta(con, eid, entrada, log=lambda m: None)["importados_alterado"] == 1
     assert len(list((tmp_path / "pdf" / "pdc" / "1.6").glob("*.pdf"))) == 2
+
+
+def test_importar_zip_do_botao_download_das_regras(banco, tmp_path):
+    import zipfile
+    from ccee import importar
+    entrada = tmp_path / "entrada"
+    entrada.mkdir()
+    with zipfile.ZipFile(entrada / "Regras.zip", "w") as z:
+        z.writestr("regras/05 - Contratos_2026.6.4_JUN.pdf", b"%PDF-1.7 caderno 05")
+        z.writestr("regras/09 - Encargos_2026.6.4_JUN.pdf", b"%PDF-1.7 caderno 09")
+        z.writestr("leia-me.txt", b"ignorado")
+    con = db.conectar()
+    eid = db.iniciar_execucao(con, "importar")
+    c = importar.importar_pasta(con, eid, entrada, log=lambda m: None)
+    assert c["importados_novo"] == 2 and not c["erros"]
+    ids = {r["id"] for r in con.execute("SELECT id FROM documentos")}
+    assert ids == {"regras:05:importado", "regras:09:importado"}

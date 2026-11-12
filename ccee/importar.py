@@ -6,12 +6,14 @@ O nome do arquivo, como o site o publica, já traz caderno/submódulo e versão:
     Regras:  "05 - Contratos_2026.6.4_JUN.pdf"
     PdCs:    "1.6_-_Comercializacao_varejista_v6.0.pdf"
 O arquivo é copiado para dados/pdf/<fonte>/<código>/ e entra no fluxo como "Baixado".
+Um ZIP (por exemplo, o do botão "Download das Regras" do site) é aberto e cada PDF de
+dentro é importado como se estivesse solto na pasta.
 """
 from __future__ import annotations
 
 import hashlib
 import re
-import shutil
+import zipfile
 from pathlib import Path
 
 from . import config, db
@@ -36,10 +38,11 @@ def identificar(nome: str) -> dict:
             "alerta": "Nome do arquivo não reconhecido como caderno de Regras nem submódulo de PdC; confira."}
 
 
-def importar_arquivo(con, exec_id: int, arq: Path, destino_base: Path | None = None) -> str:
+def importar_arquivo(con, exec_id: int, arq: Path, destino_base: Path | None = None,
+                     conteudo: bytes | None = None) -> str:
     destino_base = destino_base or config.PASTA_PDF
     tipo = EXTENSOES.get(arq.suffix.lower())
-    conteudo = arq.read_bytes()
+    conteudo = arq.read_bytes() if conteudo is None else conteudo
     if not tipo:
         raise ValueError(f"Extensão não suportada: {arq.suffix}")
     if not conteudo.startswith(ASSINATURAS[tipo]):
@@ -52,7 +55,7 @@ def importar_arquivo(con, exec_id: int, arq: Path, destino_base: Path | None = N
     caminho = pasta / f"{sha[:8]}_{nome}"
     if not caminho.exists():
         tmp = caminho.with_suffix(caminho.suffix + ".parcial")
-        shutil.copyfile(arq, tmp)
+        tmp.write_bytes(conteudo)
         tmp.replace(caminho)
     doc = {
         **info,
@@ -78,13 +81,33 @@ def importar_pasta(con, exec_id: int, pasta: Path, log=print):
     arquivos = sorted(p for p in Path(pasta).glob("*") if p.is_file() and not p.name.startswith("."))
     log(f"{len(arquivos)} arquivo(s) em {pasta}")
     for arq in arquivos:
-        try:
-            with db.transacao(con):
-                r = importar_arquivo(con, exec_id, arq)
-            c[f"importados_{r}"] += 1
-            log(f"ok    {arq.name} ({r})")
-        except Exception as e:  # noqa: BLE001
-            db.evento(con, exec_id, "erro", f"Falha ao importar {arq.name}: {e}")
-            c["erros"] += 1
-            log(f"ERRO  {arq.name}: {e}")
+        if arq.suffix.lower() == ".zip" and not identificar(arq.name)["fonte"] in ("regras", "pdc"):
+            itens = _itens_do_zip(arq, con, exec_id, c, log)
+        else:
+            itens = [(arq.name, arq, None)]
+        for rotulo, caminho, conteudo in itens:
+            try:
+                with db.transacao(con):
+                    r = importar_arquivo(con, exec_id, caminho, conteudo=conteudo)
+                c[f"importados_{r}"] += 1
+                log(f"ok    {rotulo} ({r})")
+            except Exception as e:  # noqa: BLE001
+                db.evento(con, exec_id, "erro", f"Falha ao importar {rotulo}: {e}")
+                c["erros"] += 1
+                log(f"ERRO  {rotulo}: {e}")
     return c
+
+
+def _itens_do_zip(arq: Path, con, exec_id, c, log):
+    """PDFs de dentro de um ZIP de pacote (ex.: 'Download das Regras' do site)."""
+    try:
+        with zipfile.ZipFile(arq) as z:
+            nomes = [n for n in z.namelist() if not n.endswith("/") and Path(n).suffix.lower() in EXTENSOES]
+            itens = [(f"{arq.name} › {n}", Path(Path(n).name), z.read(n)) for n in nomes]
+    except zipfile.BadZipFile as e:
+        db.evento(con, exec_id, "erro", f"Falha ao importar {arq.name}: ZIP inválido ({e})")
+        c["erros"] += 1
+        log(f"ERRO  {arq.name}: ZIP inválido")
+        return []
+    log(f"{arq.name}: {len(itens)} arquivo(s) dentro do ZIP")
+    return itens
