@@ -38,6 +38,20 @@ def ler(sql: str, params=()) -> pd.DataFrame:
         con.close()
 
 
+def texto_resumo(r) -> str:
+    """O resumo vem vazio (NaN) enquanto a execução ainda está rodando."""
+    if not isinstance(r, str) or not r:
+        return ""
+    try:
+        return ", ".join(f"{k}: {v}" for k, v in json.loads(r).items())
+    except (ValueError, AttributeError):
+        return r
+
+
+def tem(v) -> bool:
+    return v is not None and not pd.isna(v) and v != ""
+
+
 def em_andamento() -> bool:
     return config.TRAVA.exists() and not ler("SELECT id FROM execucoes WHERE status='rodando'").empty
 
@@ -90,8 +104,31 @@ with st.sidebar:
 st.title("Base CCEE · Coletor de PdCs e Regras")
 
 
+def mostrar_log():
+    log = st.session_state.get("log")
+    if not log:  # painel reaberto: mostra o log mais recente
+        logs = sorted(PASTA_LOGS.glob("coleta_*.log")) if PASTA_LOGS.exists() else []
+        log = str(logs[-1]) if logs else None
+    if log and Path(log).exists():
+        with st.expander("Saída da coleta atual / última", expanded=em_andamento()):
+            linhas = Path(log).read_text(encoding="utf-8", errors="replace").splitlines()
+            st.code("\n".join(linhas[-25:]) or "(aguardando saída...)", language=None)
+
+
 @st.fragment(run_every=5)
 def visao_ao_vivo():
+    ultima = ler("SELECT * FROM execucoes ORDER BY id DESC LIMIT 1")
+    if not ultima.empty:
+        u = ultima.iloc[0]
+        st.caption(f"Última execução #{u.id} · {u.comando} · {NOMES_STATUS.get(u.status, u.status)} · início {u.inicio}"
+                   + (f" · fim {u.fim}" if tem(u.fim) else "")
+                   + (f" · {texto_resumo(u.resumo)}" if texto_resumo(u.resumo) else ""))
+        erros_exec = ler("SELECT mensagem FROM eventos WHERE execucao_id=? AND nivel='erro' ORDER BY id LIMIT 5",
+                         (int(u.id),))
+        if not erros_exec.empty and u.status != "rodando":
+            st.error("A última coleta teve erros:\n\n" + "\n\n".join(f"- {m}" for m in erros_exec.mensagem))
+    mostrar_log()
+
     docs = ler("SELECT * FROM documentos")
     if docs.empty:
         st.info("Catálogo vazio. Clique em **Descobrir** na barra lateral para ler o site da CCEE.")
@@ -118,16 +155,6 @@ def visao_ao_vivo():
     st.caption("Documentos selecionados por etapa (as etapas depois de *Baixado* chegam na próxima fase)")
     st.dataframe(pivot, width="stretch")
 
-    ultima = ler("SELECT * FROM execucoes ORDER BY id DESC LIMIT 1")
-    if not ultima.empty:
-        u = ultima.iloc[0]
-        st.caption(f"Última execução #{u.id} · {u.comando} · {NOMES_STATUS.get(u.status, u.status)} · início {u.inicio}"
-                   + (f" · fim {u.fim}" if u.fim else ""))
-    log = st.session_state.get("log")
-    if log and Path(log).exists():
-        with st.expander("Saída da coleta atual / última disparada pelo painel", expanded=em_andamento()):
-            linhas = Path(log).read_text(encoding="utf-8", errors="replace").splitlines()
-            st.code("\n".join(linhas[-25:]) or "(aguardando saída...)", language=None)
 
 
 visao_ao_vivo()
@@ -183,7 +210,7 @@ with aba_exec:
     e = ler("SELECT * FROM execucoes ORDER BY id DESC LIMIT 200")
     if not e.empty:
         e["status"] = e.status.map(lambda s: NOMES_STATUS.get(s, s))
-        e["resumo"] = e.resumo.map(lambda r: ", ".join(f"{k}: {v}" for k, v in json.loads(r).items()) if r else "")
+        e["resumo"] = e.resumo.map(texto_resumo)
         st.dataframe(e, width="stretch", hide_index=True)
 
 with aba_evt:
