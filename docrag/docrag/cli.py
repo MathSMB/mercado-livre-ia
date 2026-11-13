@@ -1,5 +1,6 @@
 """Linha de comando.
 
+    python -m docrag esteira            # tudo de uma vez: importa (PDF e ZIP), converte, confere e publica
     python -m docrag processar [--perfil perfis/ccee] [--forcar] [--ids 1 2]
     python -m docrag verificar          # refaz portão e chunks sem reconverter (após corrigir final.md)
     python -m docrag exportar           # monta a pasta do SharePoint
@@ -29,9 +30,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="docrag", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--perfil", default=PERFIL_PADRAO, help="pasta do perfil (padrão: perfis/ccee)")
     sub = ap.add_subparsers(dest="comando", required=True)
-    for nome in ("importar", "processar", "verificar", "exportar", "avaliar"):
+    for nome in ("esteira", "importar", "processar", "verificar", "exportar", "avaliar"):
         p = sub.add_parser(nome)
-        if nome in ("processar", "verificar"):
+        if nome in ("processar", "verificar", "esteira"):
             p.add_argument("--ids", type=int, nargs="*", help="só estes documentos")
         if nome == "processar":
             p.add_argument("--forcar", action="store_true", help="reconverte mesmo o que já foi convertido")

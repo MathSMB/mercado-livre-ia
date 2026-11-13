@@ -162,7 +162,8 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
             if figura:
                 figura.nivel = AVISO
             v.append(Verificacao("numeros", AVISO if len(falta_num) <= 2 and not sobra_num else FALHA,
-                                 f"Números diferentes do PDF: faltando {falta_num[:15]}, a mais {sobra_num[:15]}.", pg,
+                                 f"Números diferentes do PDF: faltando {falta_num[:15]}, a mais {sobra_num[:15]}."
+                                 + _em_contexto(tx.sem_linhas(tx.texto_pdf(info.textos[i]), repetidas), md_final), pg,
                                  {"faltando": falta_num, "a_mais": sobra_num}))
 
         if md_ver is None or fluxo_coberto:  # no fluxograma a 2ª leitura só repetiria o mesmo aviso
@@ -246,6 +247,18 @@ def prazos_ausentes(texto_pagina_pdf: str, final_todo_norm: str) -> list[str]:
     """Tokens com dígito do PDF (5du, M-8du, MS+3du, 90d, 1º) que não aparecem em nenhum lugar do texto final."""
     tokens = {t.strip("-+").lower() for t in RE_PRAZO.findall(tx.texto_pdf(texto_pagina_pdf))}
     return sorted(t for t in tokens if t and t not in final_todo_norm)
+
+
+def _em_contexto(texto_pdf: str, md: str) -> str:
+    """Mostra o número com o que está grudado nele (ex.: no PDF "MS+6du", no texto "MS+7du")."""
+    pdf = Counter(t.strip("-+.,;:").lower() for t in RE_PRAZO.findall(tx.texto_pdf(texto_pdf)))
+    final = Counter(t.strip("-+.,;:").lower() for t in RE_PRAZO.findall(tx.markdown_para_texto(md)))
+    com_letra = lambda c: sorted(t for t in c.elements() if any(ch.isalpha() for ch in t))[:6]  # noqa: E731
+    so_pdf, so_final = com_letra(pdf - final), com_letra(final - pdf)
+    if not (so_pdf or so_final):
+        return ""
+    return (" No PDF: " + (", ".join(f'"{t}"' for t in so_pdf) or "–") + "; no texto: "
+            + (", ".join(f'"{t}"' for t in so_final) or "–") + ".")
 
 
 def _latex_chave(latex: str) -> str:

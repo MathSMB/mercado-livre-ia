@@ -450,3 +450,55 @@ def test_banco_antigo_ganha_colunas_novas(tmp_path):
     with aberto(antigo) as con:
         cols = {r[1] for r in con.execute("PRAGMA table_info(documentos)")}
     assert {"metadados_conferencia", "auditoria"} <= cols
+
+
+# --------------------------------------------------------------------------- versão 2: esteira e telas
+def test_esteira_abre_zip_processa_e_publica(perfil, monkeypatch):
+    import zipfile
+    monkeypatch.setattr(conversores, "converter", lambda n, c, i, p: conv(n, [PAG1, PAG2]))
+    perfil.pasta_entrada.mkdir(parents=True)
+    with zipfile.ZipFile(perfil.pasta_entrada / "pdcs.zip", "w") as z:
+        z.write(PDF, "Modulo 9/9.9_v2.0.pdf")
+        z.writestr("../fora.pdf", b"x")   # caminho perigoso: ignorado
+    assert pipeline.rodar(perfil, "esteira") == 0
+    assert not (perfil.pasta_entrada.parent / "fora.pdf").exists()
+    with aberto(perfil.banco) as con:
+        doc = dict(con.execute("SELECT * FROM documentos").fetchone())
+        assert doc["arquivo"] == "pdcs/Modulo 9/9.9_v2.0.pdf"
+        # o PDF de teste não tem "1. INTRODUÇÃO": metadados vão para a fila
+        pend = pipeline.pendencias(perfil, con)
+    assert [p["tipo"] for p in pend] == ["metadados"]
+    # a segunda esteira não refaz o que já foi conferido
+    assert pipeline.rodar(perfil, "esteira") == 0
+
+
+def test_correcao_na_tela_e_preservada(perfil, monkeypatch):
+    errado = PAG2.replace("MS+10du", "MS+12du")
+    monkeypatch.setattr(conversores, "converter", lambda n, c, i, p: conv(n, [PAG1, errado]))
+    perfil.pasta_entrada.mkdir(parents=True)
+    shutil.copy(PDF, perfil.pasta_entrada / "a.pdf")
+    pipeline.rodar(perfil, "esteira")
+    with aberto(perfil.banco) as con:
+        doc = dict(con.execute("SELECT * FROM documentos").fetchone())
+        assert doc["status_qualidade"] == "falha"
+        item = next(p for p in pipeline.pendencias(perfil, con) if p["tipo"] == "qualidade")
+        assert any("ms+10du" in v["mensagem"] for v in item["verificacoes"])
+    pipeline.corrigir_pagina(perfil, doc, 2, errado.replace("MS+12du", "MS+10du"))
+    pipeline.rodar(perfil, "esteira", ids=[doc["id"]])
+    with aberto(perfil.banco) as con:
+        assert con.execute("SELECT status_qualidade FROM documentos").fetchone()[0] == "ok"
+    assert "MS+10du" in (pipeline.pasta_doc(perfil, doc) / "final.md").read_text(encoding="utf-8")
+
+
+def test_painel_abre_sem_erro(perfil, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setenv("DOCRAG_PERFIL", str(perfil.pasta))
+    monkeypatch.setattr(conversores, "converter", lambda n, c, i, p: conv(n, [PAG1, PAG2]))
+    perfil.pasta_entrada.mkdir(parents=True)
+    shutil.copy(PDF, perfil.pasta_entrada / "a.pdf")
+    pipeline.rodar(perfil, "esteira")
+    at = AppTest.from_file(str(AQUI.parent / "painel.py"), default_timeout=60)
+    at.session_state["automatica"] = False
+    at.run()
+    assert not at.exception
+    assert [t.label for t in at.tabs][:4] == ["Esteira", "Precisa de você (1)", "Pacote pronto", "Detalhes"]

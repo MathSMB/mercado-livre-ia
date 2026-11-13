@@ -17,17 +17,20 @@ primeira execução e depois funcionam offline. Não geramos vetores: o Copilot/
 ## Como usar (Windows)
 
 1. Dê dois cliques em `iniciar.bat`. Na primeira vez ele cria o ambiente e instala tudo (demora).
-2. Coloque os PDFs baixados do site da CCEE em `dados/entrada/` (sem renomear). Pode ser em subpastas; o mesmo PDF repetido em duas pastas só entra uma vez.
-3. No painel, clique em **Processar PDFs novos**.
-4. O programa confere sozinho o que der (veja "Conferência por exceção" abaixo). Só sobra para você:
-   - aba **Documentos**: metadados que a conferência cruzada não confirmou (a coluna Conferido fica desmarcada);
-   - aba **Qualidade**: documentos com aviso, falha ou sorteados para auditoria. Compare o texto do PDF, o texto
-     final e a segunda leitura; corrija `final.md` à mão e clique em **Reverificar**, ou registre o aceite
-     dizendo o que conferiu.
-6. **Exportar para o SharePoint** e suba a pasta `dados/saida/sharepoint/` numa biblioteca do SharePoint.
-7. Aba **Perguntas de teste**: escreva perguntas com a resposta certa e rode o teste.
+2. Jogue os PDFs (ou o ZIP baixado da CCEE) em `dados/entrada/`, com ou sem subpastas. Não precisa renomear.
+3. Pronto: com a **esteira automática** ligada, o painel percebe os arquivos novos em até 10 segundos, lê
+   (Docling + Marker), confere, gera os trechos e publica o pacote sozinho. Cada PDF leva uns 5 minutos.
+4. O painel tem 4 telas:
+   - **Esteira**: o resumo (na esteira, precisa de você, publicados, acerto do teste de busca) e a lista de documentos;
+   - **Precisa de você**: só as exceções, com a imagem da página do PDF ao lado do texto. Corrija ali mesmo
+     ("Salvar correção e conferir de novo") ou aceite com uma nota;
+   - **Pacote pronto**: `dados/saida/notebooklm/` (um arquivo por documento) e `dados/saida/sharepoint/`
+     (um arquivo por seção), com o passo a passo e o botão de abrir a pasta;
+   - **Detalhes**: tudo o que o programa decidiu, com filtros, mais as ferramentas avançadas (metadados, trechos,
+     glossário, perguntas de teste, registro de execuções).
+5. **Atualizar programa** (canto de cima) faz o `git pull` por você.
 
-Pela linha de comando: `python -m docrag processar | verificar | exportar | avaliar | conferir ID | aceitar ID --nota "..."`.
+Pela linha de comando: `python -m docrag esteira | processar | verificar | exportar | avaliar | conferir ID | aceitar ID --nota "..."`.
 
 ## O portão de qualidade
 

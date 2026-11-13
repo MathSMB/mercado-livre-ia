@@ -81,12 +81,46 @@ class Trava:
 
 
 # --------------------------------------------------------------------------- importar
+def abrir_zips(perfil, ex: Execucao | None = None) -> int:
+    """ZIP baixado da CCEE na pasta de entrada: extrai os PDFs numa pasta ao lado, com o nome do ZIP.
+    Só extrai uma vez (a pasta existir basta). Caminhos perigosos dentro do ZIP são ignorados."""
+    import zipfile
+    n = 0
+    for z in sorted(perfil.pasta_entrada.rglob("*.zip"), key=lambda p: str(p).lower()):
+        destino = z.with_suffix("")
+        if destino.exists():
+            continue
+        try:
+            with zipfile.ZipFile(z) as arq:
+                for item in arq.infolist():
+                    nome = Path(item.filename)
+                    if item.is_dir() or nome.suffix.lower() != ".pdf" or nome.is_absolute() or ".." in nome.parts:
+                        continue
+                    alvo = destino / nome
+                    alvo.parent.mkdir(parents=True, exist_ok=True)
+                    with arq.open(item) as orig, open(alvo, "wb") as dest:
+                        shutil.copyfileobj(orig, dest)
+                    n += 1
+            destino.mkdir(exist_ok=True)
+            if ex:
+                ex.evento("info", f"ZIP aberto: {z.name} → {destino.name}/")
+        except zipfile.BadZipFile:
+            if ex:
+                ex.evento("erro", f"{z.name}: o ZIP está corrompido ou incompleto. Baixe de novo.")
+    return n
+
+
+def pdfs_na_entrada(perfil) -> list[Path]:
+    return sorted((p for p in perfil.pasta_entrada.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"),
+                  key=lambda p: str(p).lower())
+
+
 def importar(perfil, con, ex: Execucao) -> list[int]:
     perfil.pasta_entrada.mkdir(parents=True, exist_ok=True)
+    abrir_zips(perfil, ex)
     novos = []
     # Lê também as subpastas: pode jogar as pastas organizadas inteiras em "entrada".
-    pdfs = [p for p in perfil.pasta_entrada.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"]
-    for pdf in sorted(pdfs, key=lambda p: str(p).lower()):
+    for pdf in pdfs_na_entrada(perfil):
         nome = pdf.relative_to(perfil.pasta_entrada).as_posix()   # ex. "PdCs/Modulo 1/1.6.pdf"
         h = sha256(pdf)
         if con.execute("SELECT 1 FROM documentos WHERE sha256=?", (h,)).fetchone():
@@ -305,6 +339,39 @@ def verificar(perfil, con, ex: Execucao, doc) -> str | None:
     return rel.status
 
 
+def corrigir_pagina(perfil, doc, pagina: int, texto: str):
+    """Troca o texto de uma página no final.md (correção feita na tela). Fica preservada como correção à mão."""
+    arq = pasta_doc(perfil, doc) / "final.md"
+    paginas = conversores.separar_paginas(arq.read_text(encoding="utf-8"))
+    paginas[pagina - 1] = texto.strip("\n")
+    arq.write_text(conversores.juntar_paginas(paginas), encoding="utf-8")
+
+
+def pendencias(perfil, con) -> list[dict]:
+    """O que precisa de uma pessoa, documento por documento, já em palavras simples."""
+    itens = []
+    for d in con.execute("SELECT * FROM documentos ORDER BY tipo, documento, versao").fetchall():
+        d = dict(d)
+        if d.get("erro"):
+            itens.append({"doc": d, "tipo": "erro", "texto": d["erro"]})
+            continue
+        if d["etapa"] in ("importado", "convertido"):
+            continue  # ainda na esteira
+        if not d["metadados_ok"]:
+            itens.append({"doc": d, "tipo": "metadados",
+                          "texto": d.get("metadados_motivo") or "os metadados ainda não foram conferidos"})
+        if d["status_qualidade"] in ("aviso", "falha") and not d["aceito_em"]:
+            vs = [dict(v) for v in con.execute(
+                "SELECT * FROM verificacoes WHERE documento_id=? AND nivel IN ('aviso','falha') "
+                "ORDER BY CASE nivel WHEN 'falha' THEN 0 ELSE 1 END, pagina", (d["id"],))]
+            itens.append({"doc": d, "tipo": "qualidade", "verificacoes": vs,
+                          "texto": f"{len(vs)} ponto(s) que nenhuma das leituras resolveu sozinha"})
+        if d.get("auditoria") == "pendente":
+            itens.append({"doc": d, "tipo": "auditoria",
+                          "texto": f"sorteado para auditoria (1 em cada {perfil.automacao.auditoria_1_em})"})
+    return itens
+
+
 # --------------------------------------------------------------------------- exportar
 def apto(perfil, doc) -> tuple[bool, str]:
     if doc["etapa"] not in ("verificado", "exportado"):
@@ -396,12 +463,14 @@ def rodar(perfil, comando: str, forcar: bool = False, ids: list[int] | None = No
         ex = Execucao(con, comando + (" --forcar" if forcar else "") + (f" --ids {ids}" if ids else ""))
         resumo: dict = {}
         try:
-            if comando in ("importar", "processar"):
+            if comando in ("importar", "processar", "esteira"):
                 resumo["importados"] = len(importar(perfil, con, ex))
-            if comando in ("processar", "verificar"):
+            if comando in ("processar", "verificar", "esteira"):
                 sql = "SELECT * FROM documentos" + (f" WHERE id IN ({','.join('?' * len(ids))})" if ids else "")
                 for doc in con.execute(sql + " ORDER BY id", ids or []).fetchall():
-                    if comando == "processar" and not converter(perfil, con, ex, doc, forcar):
+                    if comando == "esteira" and not ids and doc["etapa"] in ("verificado", "exportado"):
+                        continue  # na esteira automática, o que já foi conferido não é refeito
+                    if comando in ("processar", "esteira") and not converter(perfil, con, ex, doc, forcar):
                         continue
                     doc = con.execute("SELECT * FROM documentos WHERE id=?", (doc["id"],)).fetchone()
                     reextrair_metadados(perfil, con, ex, doc)
@@ -413,7 +482,7 @@ def rodar(perfil, comando: str, forcar: bool = False, ids: list[int] | None = No
                     st = verificar(perfil, con, ex, doc)
                     if st:
                         resumo[st] = resumo.get(st, 0) + 1
-            if comando == "exportar":
+            if comando in ("exportar", "esteira"):
                 resumo.update(exportar_tudo(perfil, con, ex))
             if comando == "avaliar":
                 resumo.update(avaliar(perfil, con, ex))
