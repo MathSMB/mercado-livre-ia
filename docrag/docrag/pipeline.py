@@ -96,7 +96,7 @@ def importar(perfil, con, ex: Execucao) -> list[int]:
         except Exception as e:  # PDF corrompido ou protegido
             ex.evento("erro", f"{nome}: não consegui abrir o PDF ({e}).")
             continue
-        inicio = "\n".join(info.textos[:2])
+        inicio = "\n".join(info.textos[:3])
         meta = metadados.extrair(perfil, inicio)
         origem = "extraido" if meta else None
         conferido = 0
@@ -121,6 +121,22 @@ def importar(perfil, con, ex: Execucao) -> list[int]:
         ex.evento("info", f"Importado: {nome} ({info.n_paginas} páginas, tipo {meta.get('tipo') or '?'}).", doc_id)
         novos.append(doc_id)
     return novos
+
+
+def reextrair_metadados(perfil, con, ex: Execucao, doc):
+    """Metadados ainda não conferidos são tirados de novo (as regras do perfil podem ter melhorado)."""
+    if doc["metadados_ok"] or doc["metadados_origem"] not in (None, "extraido"):
+        return
+    pdf = pasta_doc(perfil, doc) / "original.pdf"
+    tipo = perfil.tipo(doc["tipo"])
+    n = tipo.paginas_metadados if tipo else 3
+    meta = metadados.extrair(perfil, "\n".join(conversores.ler_pdf(pdf).textos[:n]))
+    novos = {c: meta.get(c) for c in CAMPOS_METADADOS if meta.get(c) and meta.get(c) != doc[c]}
+    if novos:
+        con.execute(f"UPDATE documentos SET {', '.join(c + '=?' for c in novos)}, metadados_origem='extraido' WHERE id=?",
+                    (*novos.values(), doc["id"]))
+        con.commit()
+        ex.evento("info", f"{doc['arquivo']}: metadados atualizados {novos}.", doc["id"])
 
 
 # --------------------------------------------------------------------------- converter
@@ -329,6 +345,8 @@ def rodar(perfil, comando: str, forcar: bool = False, ids: list[int] | None = No
                 for doc in con.execute(sql + " ORDER BY id", ids or []).fetchall():
                     if comando == "processar" and not converter(perfil, con, ex, doc, forcar):
                         continue
+                    doc = con.execute("SELECT * FROM documentos WHERE id=?", (doc["id"],)).fetchone()
+                    reextrair_metadados(perfil, con, ex, doc)
                     doc = con.execute("SELECT * FROM documentos WHERE id=?", (doc["id"],)).fetchone()
                     if doc["etapa"] == "importado":
                         continue

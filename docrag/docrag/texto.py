@@ -17,7 +17,7 @@ RE_HIFEN_QUEBRA = re.compile(r"(\w)[\-\u00ad]\s*\n\s*(\w)")
 
 
 def normalizar_unicode(t: str) -> str:
-    t = unicodedata.normalize("NFKC", t)
+    t = unicodedata.normalize("NFKC", t).replace("°", "o").replace("º", "o")  # 1°d, 1ºd e 1od são o mesmo
     return t.replace("\u00ad", "").replace("\ufffe", "").replace("\x02", "").replace("\r", "\n")
 
 

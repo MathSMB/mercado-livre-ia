@@ -17,6 +17,7 @@ from . import texto as tx
 from .conversores import RE_MARCA_PAGINA
 
 RE_TITULO = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+RE_ITEM_LISTA = re.compile(r"^(?:[-*+]\s|\d+[.)]\s)")  # item de lista não indentado
 RE_NUMERO = re.compile(r"^\**\s*(\d+(?:\.\d+)*)\.?\s+(.+?)\**$")
 
 
@@ -110,8 +111,10 @@ def _blocos(md: str) -> list[Bloco]:
             if tipo_atual != "tabela":
                 fechar()
             continue
-        if tipo_atual == "tabela":
-            fechar()
+        if s == "<!-- image -->":  # marcador de imagem do Docling: não ajuda a busca
+            continue
+        if tipo_atual == "tabela" or (RE_ITEM_LISTA.match(linha) and atual):
+            fechar()  # cada item de lista é um bloco: dá para dividir a seção entre itens
         atual.append(linha)
     fechar()
     return blocos
@@ -172,47 +175,71 @@ def _dividir_tabela(bloco: Bloco, max_palavras: int) -> list[Bloco]:
     return partes
 
 
+def _pal(b: Bloco) -> int:
+    return len(tx.palavras(tx.markdown_para_texto(b.texto)))
+
+
+def _profundidade(b: Bloco) -> int | None:
+    m = RE_ITEM.match(b.texto) if b.tipo == "texto" else None
+    return len(m.group(1).split(".")) if m else None
+
+
 def _empacotar(blocos: list[Bloco], max_palavras: int) -> list[list[Bloco]]:
-    grupos, atual, n = [], [], 0
+    """Agrupa blocos até max_palavras. Ao cortar, prefere o início de um item de nível mais alto (ex.: 3.22),
+    para um subitem (3.22.3) não ficar separado do item que o introduz."""
+    grupos, atual = [], []
     for b in blocos:
         pedacos = _dividir_tabela(b, max_palavras) if b.tipo == "tabela" else [b]
         for p in pedacos:
-            w = len(tx.palavras(tx.markdown_para_texto(p.texto)))
-            if atual and n + w > max_palavras and any(x.tipo != "titulo" for x in atual):
-                grupos.append(atual)
-                atual, n = [], 0
+            if atual and sum(map(_pal, atual)) + _pal(p) > max_palavras and any(x.tipo != "titulo" for x in atual):
+                corte = len(atual)
+                profs = [(_profundidade(x), j) for j, x in enumerate(atual) if _profundidade(x)]
+                if profs:
+                    raiz = min(pr for pr, _ in profs)
+                    candidatos = [j for pr, j in profs if pr == raiz and j > 0
+                                  and sum(map(_pal, atual[:j])) >= max_palavras // 2]
+                    if candidatos and _profundidade(p) != raiz:
+                        corte = candidatos[-1]
+                grupos.append(atual[:corte])
+                atual = atual[corte:]
             atual.append(p)
-            n += w
     if atual:
         grupos.append(atual)
     return grupos
 
 
-def _mesmo_ramo(a: Secao, b: Secao) -> bool:
-    if not a.caminho or not b.caminho:
-        return not a.caminho and not b.caminho
-    return b.caminho[: len(a.caminho)] == a.caminho or a.caminho[:-1] == b.caminho[:-1]
+def _descendente(pai: Secao, filho: Secao) -> bool:
+    return bool(pai.caminho) and filho.caminho[: len(pai.caminho)] == pai.caminho and filho is not pai
+
+
+RE_ITEM = re.compile(r"^\s*(?:[-*]\s+)?\**(\d+(?:\.\d+)+)\.?\**\s")
+
+
+def _itens(blocos: list[Bloco]) -> list[str]:
+    """Números de itens no início dos blocos (ex.: premissas "- 3.10 ..."), para rotular o chunk."""
+    return [m.group(1) for b in blocos if b.tipo == "texto" for m in [RE_ITEM.match(b.texto)] if m]
 
 
 def chunks(md: str, max_palavras: int = 700, min_palavras: int = 60, nivel_maximo: int = 3) -> list[Chunk]:
-    # 1. junta seções curtas (ou só com título) com a seguinte do mesmo ramo
+    # 1. Junta: título sem texto vai com a seção seguinte; seção curta absorve suas subseções.
+    #    Seções irmãs nunca se juntam (ex.: "2 Objetivo" curto não vira parte de "3 Premissas").
     finais: list[list[Secao]] = []
     grupo: list[Secao] = []
     for s in secoes(md, nivel_maximo):
-        if grupo and not _mesmo_ramo(grupo[-1], s):
+        if grupo:
+            palavras = sum(x.palavras() for x in grupo)
+            if palavras == 0 or (palavras < min_palavras and _descendente(grupo[0], s)):
+                grupo.append(s)
+                continue
             finais.append(grupo)
-            grupo = []
-        grupo.append(s)
-        if sum(x.palavras() for x in grupo) >= min_palavras:
-            finais.append(grupo)
-            grupo = []
+        grupo = [s]
     if grupo:
-        if finais and _mesmo_ramo(finais[-1][-1], grupo[0]) and sum(x.palavras() for x in grupo) > 0:
+        if finais and sum(x.palavras() for x in grupo) < min_palavras and _descendente(finais[-1][0], grupo[0]):
             finais[-1].extend(grupo)
         else:
             finais.append(grupo)
 
-    # 2. corta unidades grandes entre blocos
+    # 2. Corta unidades grandes entre blocos; cada parte leva os números de item que contém.
     resultado: list[Chunk] = []
     for grupo in finais:
         com_texto = [s for s in grupo if s.palavras() > 0] or grupo
@@ -221,8 +248,12 @@ def chunks(md: str, max_palavras: int = 700, min_palavras: int = 60, nivel_maxim
         blocos = [b for s in grupo for b in s.blocos]
         pacotes = _empacotar(blocos, max_palavras)
         for i, pac in enumerate(pacotes, start=1):
+            secao = rotulo
+            itens = _itens(pac)
+            if len(pacotes) > 1 and itens:
+                secao += f" (itens {itens[0]} a {itens[-1]})" if len(itens) > 1 else f" (item {itens[0]})"
             resultado.append(Chunk(
-                ordem=len(resultado) + 1, secao=rotulo, numero=principal.numero,
+                ordem=len(resultado) + 1, secao=secao, numero=principal.numero,
                 caminho=principal.caminho or [principal.titulo],
                 pagina_inicio=min(b.pagina for b in pac), pagina_fim=max(b.pagina for b in pac),
                 texto="\n\n".join(b.texto for b in pac).strip(), parte=i, de_partes=len(pacotes)))

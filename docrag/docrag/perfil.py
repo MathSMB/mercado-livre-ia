@@ -18,7 +18,9 @@ class TipoDocumento:
     nome: str
     rotulo: str
     detectar: list[str]                     # regex; basta uma casar no início do texto
-    campos: dict[str, str] = field(default_factory=dict)  # campo -> regex com 1 grupo
+    # campo -> regex com 1 grupo, ou tabela {padrao, ocorrencia = "primeira"|"ultima", depois_de, antes_de}
+    campos: dict[str, str | dict] = field(default_factory=dict)
+    paginas_metadados: int = 3              # quantas páginas iniciais olhar
     conversor_principal: str | None = None  # sobrepõe o padrão do perfil
 
     def casa(self, texto: str) -> bool:
@@ -26,10 +28,23 @@ class TipoDocumento:
 
     def extrair(self, texto: str) -> dict[str, str]:
         achados = {}
-        for campo, padrao in self.campos.items():
-            m = re.search(padrao, texto)
-            if m:
-                achados[campo] = " ".join(m.group(1).split())
+        for campo, regra in self.campos.items():
+            if isinstance(regra, str):
+                regra = {"padrao": regra}
+            trecho = texto
+            if regra.get("depois_de"):
+                m = re.search(regra["depois_de"], trecho)
+                trecho = trecho[m.end():] if m else ""
+            if regra.get("antes_de"):
+                m = re.search(regra["antes_de"], trecho)
+                trecho = trecho[:m.start()] if m else trecho
+            ms = list(re.finditer(regra["padrao"], trecho))
+            if ms:
+                m = ms[-1] if regra.get("ocorrencia") == "ultima" else ms[0]
+                valor = " ".join(m.group(1).split())
+                if campo.startswith("vigencia"):  # 01.07.2025 -> 01/07/2025
+                    valor = re.sub(r"^(\d{2})[.\-](\d{2})[.\-](\d{4})$", r"\1/\2/\3", valor)
+                achados[campo] = valor
         return achados
 
 
@@ -97,7 +112,8 @@ def carregar(pasta: str | Path) -> Perfil:
         return p if p.is_absolute() else (pasta / p).resolve()
 
     tipos = [TipoDocumento(nome=t["nome"], rotulo=t.get("rotulo", t["nome"]), detectar=t.get("detectar", []),
-                           campos=t.get("campos", {}), conversor_principal=t.get("conversor_principal"))
+                           campos=t.get("campos", {}), conversor_principal=t.get("conversor_principal"),
+                           paginas_metadados=t.get("paginas_metadados", 3))
              for t in d.get("tipos", [])]
     conv = d.get("conversao", {})
     return Perfil(

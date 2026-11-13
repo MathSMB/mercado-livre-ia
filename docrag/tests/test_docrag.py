@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import re
 import shutil
 from datetime import date
 from pathlib import Path
@@ -22,13 +23,16 @@ PRAZO = ("O agente deve enviar os dados até o 5º dia útil do mês subsequente
          "montante de 1.250,75 MWh. ")
 RESP = "Cabe à CCEE publicar o resultado em até 10 dias. "
 
-PAG1 = f"""# Procedimento de Comercialização
+PAG1 = f"""## Submódulo 9.9 – Exemplo de Teste
 
-## Submódulo 9.9 – Exemplo de Teste
+Revisão 2.0
 
-Versão 2.0 – Vigência: 01/01/2026
+# Procedimentos de Comercialização
 
-Aprovado pela REN ANEEL nº 1.234/2025
+| Revisão | Motivo da Revisão | Instrumento de aprovação | Data de Vigência |
+|---|---|---|---|
+| 1.0 | Primeira versão | Despacho nº 100/2020 | 01.02.2020 |
+| 2.0 | Revisão geral | REN ANEEL nº 1.234/2025 | 01.01.2026 |
 
 ## 1. OBJETIVO
 
@@ -316,3 +320,17 @@ def test_marker_falhando_nao_derruba_documento(perfil, monkeypatch):
         avisos = [r[0] for r in con.execute("SELECT codigo FROM verificacoes WHERE nivel='aviso'")]
     assert doc["etapa"] == "verificado" and doc["status_qualidade"] == "aviso"
     assert "segunda_leitura" in avisos
+
+
+def test_premissas_em_lista_cortam_no_item_principal():
+    itens = []
+    for n in range(1, 13):
+        itens.append(f"- 3.{n} Premissa número {n} " + "texto da premissa " * 20)
+        itens.append(f"- 3.{n}.1 Subitem da premissa {n} " + "detalhe " * 15)
+    md = "## 3. PREMISSAS\n\n" + "\n".join(itens)
+    cs = chunking.chunks(md, max_palavras=200, min_palavras=10)
+    assert len(cs) > 3
+    for c in cs:
+        primeira = next(l for l in c.texto.splitlines() if l.startswith("- "))
+        assert re.match(r"- 3\.\d+ ", primeira), primeira   # nenhum chunk começa num subitem
+        assert "(ite" in c.secao

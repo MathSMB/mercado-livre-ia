@@ -9,8 +9,11 @@ doc = SimpleDocTemplate(sys.argv[1], pagesize=A4)
 def rodape(c, d):
     c.setFont("Helvetica", 8); c.drawString(40, 20, f"Procedimento de Comercialização exemplo - Página {d.page}")
 E = []
-E += [Paragraph("Procedimento de Comercialização", st["Title"]), Paragraph("Submódulo 9.9 – Exemplo de Teste", st["Heading2"]),
-      Paragraph("Versão 2.0 – Vigência: 01/01/2026", st["Normal"]), Paragraph("Aprovado pela REN ANEEL nº 1.234/2025", st["Normal"])]
+E += [Paragraph("Submódulo 9.9 – Exemplo de Teste", st["Heading2"]), Paragraph("Revisão 2.0", st["Normal"]),
+      Paragraph("Procedimentos de Comercialização", st["Title"]),
+      Table([["Revisão", "Motivo da Revisão", "Instrumento de aprovação", "Data de Vigência"],
+             ["1.0", "Primeira versão", "Despacho nº 100/2020", "01.02.2020"],
+             ["2.0", "Revisão geral", "REN ANEEL nº 1.234/2025", "01.01.2026"]], style=[("GRID",(0,0),(-1,-1),0.5,"black")])]
 E += [Paragraph("1. OBJETIVO", st["Heading1"]), Paragraph("Este submódulo estabelece as regras de exemplo para o Mecanismo de Compensação de Sobras e Déficits (MCSD) e para a Câmara de Comercialização de Energia Elétrica (CCEE). " * 3, st["Normal"])]
 E += [Paragraph("2. PREMISSAS", st["Heading1"]), Paragraph("2.1 Prazos", st["Heading2"]),
       Paragraph("O agente deve enviar os dados até o 5º dia útil do mês subsequente, com tolerância de 2,5% sobre o montante de 1.250,75 MWh. " * 4, st["Normal"]),

@@ -109,7 +109,10 @@ def converter_docling(caminho: Path, opcoes: dict | None = None) -> Conversao:
     res = conv.convert(str(caminho))
     doc = res.document
     n = doc.num_pages()
-    paginas = [doc.export_to_markdown(page_no=i) for i in range(1, n + 1)]
+    # traverse_pictures: inclui o texto que está dentro de desenhos (fluxogramas vetoriais dos PdCs)
+    paginas = [doc.export_to_markdown(page_no=i, traverse_pictures=True) for i in range(1, n + 1)]
+    if opcoes.get("_json_destino"):  # guarda o documento completo para reexportar sem reconverter
+        doc.save_as_json(Path(opcoes["_json_destino"]))
     avisos = [str(e) for e in (getattr(res, "errors", None) or [])]
     return Conversao("docling", _versao("docling"), paginas, time.perf_counter() - t0, avisos)
 
@@ -151,7 +154,7 @@ def converter_marker(caminho: Path, n_paginas: int, opcoes: dict | None = None) 
 
 def converter(nome: str, caminho: Path, info: InfoPdf, perfil) -> Conversao:
     if nome == "docling":
-        return converter_docling(caminho, perfil.docling)
+        return converter_docling(caminho, {**perfil.docling, "_json_destino": caminho.parent / "docling.json"})
     if nome == "marker":
         return converter_marker(caminho, info.n_paginas, perfil.marker)
     raise ValueError(f"Conversor desconhecido: {nome}")

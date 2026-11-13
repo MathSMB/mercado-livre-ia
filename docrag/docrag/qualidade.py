@@ -98,8 +98,11 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         v.append(Verificacao("paginas", OK, f"{info.n_paginas} páginas em todas as leituras."))
 
     repetidas = tx.linhas_repetidas([tx.texto_pdf(t) for t in info.textos])
-    logo = sum(1 for n in info.imagens if n) >= 0.8 * max(info.n_paginas, 1) and info.n_paginas >= 3
+    # Imagens que aparecem em quase todas as páginas são logotipo de cabeçalho/rodapé: desconta o mínimo comum.
+    base_logo = min(info.imagens) if info.n_paginas >= 3 and \
+        sum(1 for n in info.imagens if n) >= 0.8 * info.n_paginas else 0
     n_formulas = {}
+    md_final_todo_norm = _sem_espacos(tx.markdown_para_texto("\n".join(final_pag)))
 
     for i in range(info.n_paginas):
         pg = i + 1
@@ -107,7 +110,8 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         md_final = final_pag[i] if i < len(final_pag) else ""
         md_ver = verificador.paginas[i] if verificador and i < len(verificador.paginas) else None
         pal_final = tx.palavras(tx.markdown_para_texto(md_final))
-        imagens = max(0, info.imagens[i] - (1 if logo else 0))
+        imagens = max(0, info.imagens[i] - base_logo)
+        imagem_no_texto = "<!-- image -->" in md_final
 
         # 2. Página sem camada de texto (escaneada) ou quase só figura
         if len(ref) < limiares.min_palavras_pagina:
@@ -126,20 +130,35 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         # 3. Cobertura: tudo o que está escrito no PDF aparece no texto final?
         cob, faltando = tx.cobertura(ref, pal_final)
         nivel = _nivel(cob, limiares.cobertura_aviso, limiares.cobertura_falha)
-        v.append(Verificacao("cobertura", nivel, f"{cob:.1%} das palavras do PDF estão no texto final.", pg,
-                             {"cobertura": round(cob, 4), "faltando": faltando[:25]}))
+        msg = f"{cob:.1%} das palavras do PDF estão no texto final."
+        fluxo_coberto = False
+        if nivel != OK and imagem_no_texto:
+            # Fluxograma desenhado: o texto do desenho não vira texto corrido. Nos PdCs as mesmas atividades e
+            # prazos estão na tabela de descrição de atividades; se TODOS os prazos/números da página aparecem
+            # em outro ponto do documento, nada se perdeu para a base.
+            ausentes = prazos_ausentes(info.textos[i], md_final_todo_norm)
+            fluxo_coberto = not ausentes
+            nivel = AVISO if fluxo_coberto else FALHA
+            msg += (" Página com fluxograma desenhado: o texto do desenho não foi extraído. " +
+                    ("Todos os prazos e números dele aparecem em outra parte do documento (ex.: descrição de "
+                     "atividades). Confira e aceite." if fluxo_coberto else
+                     f"Prazos/números do desenho que não aparecem em lugar nenhum do texto: {ausentes[:15]}. "
+                     "Cole o texto do fluxograma no final.md."))
+        v.append(Verificacao("cobertura", nivel, msg, pg, {"cobertura": round(cob, 4), "faltando": faltando[:25]}))
+        pdf_confere = nivel == OK
 
         # 4. Números: prazos, percentuais, artigos, valores. Um número a menos é erro grave.
         nums_pdf = Counter(tx.numeros(tx.sem_linhas(tx.texto_pdf(info.textos[i]), repetidas)))
         nums_final = Counter(tx.numeros(tx.markdown_para_texto(md_final)))
         falta_num = sorted((nums_pdf - nums_final).elements())
         sobra_num = sorted((nums_final - nums_pdf).elements())
-        if falta_num or sobra_num:
+        if (falta_num or sobra_num) and not fluxo_coberto:
+            pdf_confere = False
             v.append(Verificacao("numeros", AVISO if len(falta_num) <= 2 and not sobra_num else FALHA,
                                  f"Números diferentes do PDF: faltando {falta_num[:15]}, a mais {sobra_num[:15]}.", pg,
                                  {"faltando": falta_num, "a_mais": sobra_num}))
 
-        if md_ver is None:
+        if md_ver is None or fluxo_coberto:  # no fluxograma a 2ª leitura só repetiria o mesmo aviso
             continue
         pal_ver = tx.palavras(tx.markdown_para_texto(md_ver))
 
@@ -147,6 +166,9 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         sm = SequenceMatcher(None, pal_final, pal_ver, autojunk=False)
         conc = sm.ratio() if (pal_final or pal_ver) else 1.0
         nivel = _nivel(conc, limiares.concordancia_aviso, limiares.concordancia_falha)
+        if nivel == FALHA and (pdf_confere or fluxo_coberto):
+            # O texto final bate com o PDF (palavras e números): a diferença é da 2ª leitura ou da ordem (tabelas).
+            nivel = AVISO
         if nivel != OK:
             trechos = [(" ".join(pal_final[a1:a2][:20]), " ".join(pal_ver[b1:b2][:20]))
                        for op, a1, a2, b1, b2 in sm.get_opcodes() if op != "equal"][:8]
@@ -193,6 +215,19 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         v.append(Verificacao("titulos", AVISO, "Nenhum título numerado encontrado; os chunks serão cortados só pelos "
                              "títulos Markdown."))
     return Relatorio(v)
+
+
+def _sem_espacos(t: str) -> str:
+    return re.sub(r"\s+", "", tx.normalizar_unicode(t)).lower()
+
+
+RE_PRAZO = re.compile(r"[\w+\-º°]*\d[\w+\-º°]*")
+
+
+def prazos_ausentes(texto_pagina_pdf: str, final_todo_norm: str) -> list[str]:
+    """Tokens com dígito do PDF (5du, M-8du, MS+3du, 90d, 1º) que não aparecem em nenhum lugar do texto final."""
+    tokens = {t.strip("-+").lower() for t in RE_PRAZO.findall(tx.texto_pdf(texto_pagina_pdf))}
+    return sorted(t for t in tokens if t and t not in final_todo_norm)
 
 
 def _latex_chave(latex: str) -> str:

@@ -41,13 +41,15 @@ nivel_maximo = 3
 [[tipos]]
 nome    = "pdc"
 rotulo  = "Procedimento de Comercialização"
-detectar = ['(?is)procedimentos?\s+de\s+comercializa.{0,400}?subm[óo]dulo']
+detectar = ['(?is)subm[óo]dulo\s+\d+\.\d+.{0,300}?procedimentos?\s+de\s+comercializa', '(?is)procedimentos?\s+de\s+comercializa.{0,400}?subm[óo]dulo']
+# Capa real (PdC 1.6 e 1.8, nov/2026): cabeçalho "Submódulo 1.6 – Título" + "Revisão 7.0" e, na pág. 2,
+# a tabela "Revisão | Motivo | Instrumento de aprovação | Data de Vigência". A última linha é a versão atual.
 [tipos.campos]
-documento       = '(?i)subm[óo]dulo\s+(\d+\.\d+)'
-titulo          = '(?i)subm[óo]dulo\s+\d+\.\d+\s*[-–—:]?\s*([^\r\n]{3,120})'
-versao          = '(?i)vers[ãa]o\s*(?:n[ºo°]\.?\s*)?[:\-–]?\s*(\d+(?:\.\d+)*)'
-vigencia_inicio = '(?i)vig[êe]ncia\s*(?:a partir de|desde|:)?\s*[:\-–]?\s*(\d{2}/\d{2}/\d{4})'
-ato             = '(?i)((?:REN|Resolu[çc][ãa]o\s+Normativa|Despacho)\s+(?:ANEEL\s+)?n?[ºo°]?\s*[\d.]+/\d{4})'
+documento = '(?i)subm[óo]dulo\s+(\d+\.\d+)'
+titulo    = '(?i)subm[óo]dulo\s+\d+\.\d+\s*[-–—]\s*([^\r\n]+?)\s*[\r\n]+\s*revis[ãa]o'
+versao    = '(?i)revis[ãa]o\s+(\d+\.\d+)'
+vigencia_inicio = { padrao = '(\d{2}[./]\d{2}[./]\d{4})', ocorrencia = "ultima", depois_de = '(?i)data\s+de\s+vig[êe]ncia', antes_de = '(?m)^\s*1\.\s*INTRODU' }
+ato       = { padrao = '((?:Resolu[çc][ãa]o\s+Normativa|REN|Despacho)\s+(?:ANEEL\s+)?n?\s*[ºo°]?\s*[\d.]+/\d{4})', ocorrencia = "ultima", depois_de = '(?i)data\s+de\s+vig[êe]ncia', antes_de = '(?m)^\s*1\.\s*INTRODU' }
 
 [[tipos]]
 nome    = "regra"
