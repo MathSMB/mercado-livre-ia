@@ -49,20 +49,23 @@ class Trava:
 def importar(perfil, con, ex: Execucao) -> list[int]:
     perfil.pasta_entrada.mkdir(parents=True, exist_ok=True)
     novos = []
-    for pdf in sorted(perfil.pasta_entrada.glob("*.pdf"), key=lambda p: p.name.lower()):
+    # Lê também as subpastas: pode jogar as pastas organizadas inteiras em "entrada".
+    pdfs = [p for p in perfil.pasta_entrada.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"]
+    for pdf in sorted(pdfs, key=lambda p: str(p).lower()):
+        nome = pdf.relative_to(perfil.pasta_entrada).as_posix()   # ex. "PdCs/Modulo 1/1.6.pdf"
         h = sha256(pdf)
         if con.execute("SELECT 1 FROM documentos WHERE sha256=?", (h,)).fetchone():
             continue
         try:
             info = conversores.ler_pdf(pdf)
         except Exception as e:  # PDF corrompido ou protegido
-            ex.evento("erro", f"{pdf.name}: não consegui abrir o PDF ({e}).")
+            ex.evento("erro", f"{nome}: não consegui abrir o PDF ({e}).")
             continue
         inicio = "\n".join(info.textos[:2])
         meta = metadados.extrair(perfil, inicio)
         origem = "extraido" if meta else None
         conferido = 0
-        do_csv = metadados.do_csv(perfil, pdf.name, h)
+        do_csv = metadados.do_csv(perfil, nome, h)
         if do_csv:
             meta.update({k: v for k, v in do_csv.items() if k in CAMPOS_METADADOS and v})
             origem = "documentos.csv"
@@ -70,17 +73,17 @@ def importar(perfil, con, ex: Execucao) -> list[int]:
         doc_id = con.execute(
             f"INSERT INTO documentos (arquivo, sha256, paginas, {', '.join(CAMPOS_METADADOS)}, metadados_origem, "
             f"metadados_ok, importado_em, atualizado_em) VALUES (?,?,?,{','.join('?' * len(CAMPOS_METADADOS))},?,?,?,?)",
-            (pdf.name, h, info.n_paginas, *[meta.get(c) for c in CAMPOS_METADADOS], origem, conferido, agora(), agora()),
+            (nome, h, info.n_paginas, *[meta.get(c) for c in CAMPOS_METADADOS], origem, conferido, agora(), agora()),
         ).lastrowid
-        mesmo_nome = con.execute("SELECT id FROM documentos WHERE arquivo=? AND id<>?", (pdf.name, doc_id)).fetchall()
+        mesmo_nome = con.execute("SELECT id FROM documentos WHERE arquivo=? AND id<>?", (nome, doc_id)).fetchall()
         if mesmo_nome:
-            ex.evento("aviso", f"{pdf.name}: já existia um arquivo com esse nome e conteúdo diferente "
+            ex.evento("aviso", f"{nome}: já existia um arquivo com esse nome e conteúdo diferente "
                                f"(ids {[r[0] for r in mesmo_nome]}). Confira se é uma versão nova.", doc_id)
-        destino = pasta_doc(perfil, {"id": doc_id, "arquivo": pdf.name})
+        destino = pasta_doc(perfil, {"id": doc_id, "arquivo": nome})
         destino.mkdir(parents=True, exist_ok=True)
         shutil.copy2(pdf, destino / "original.pdf")
         con.commit()
-        ex.evento("info", f"Importado: {pdf.name} ({info.n_paginas} páginas, tipo {meta.get('tipo') or '?'}).", doc_id)
+        ex.evento("info", f"Importado: {nome} ({info.n_paginas} páginas, tipo {meta.get('tipo') or '?'}).", doc_id)
         novos.append(doc_id)
     return novos
 

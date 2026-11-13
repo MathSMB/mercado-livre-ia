@@ -281,3 +281,13 @@ def test_portao_pega_numero_colado_em_letras(info, perfil):
     errado = PAG2.replace("MS+10du", "MS+12du")
     rel = qualidade.avaliar(info, conv("docling", [PAG1, errado]), conv("marker", [PAG1, PAG2]), perfil.limiares)
     assert any(v.codigo == "numeros" and v.pagina == 2 for v in rel.problemas())
+
+
+def test_importa_pdfs_de_subpastas(perfil, monkeypatch):
+    monkeypatch.setattr(conversores, "converter", lambda n, c, i, p: conv(n, [PAG1, PAG2]))
+    sub = perfil.pasta_entrada / "PdCs" / "Modulo 9"
+    sub.mkdir(parents=True)
+    shutil.copy(PDF, sub / "9.9.PDF")
+    assert pipeline.rodar(perfil, "processar") == 0
+    with aberto(perfil.banco) as con:
+        assert con.execute("SELECT arquivo FROM documentos").fetchone()[0] == "PdCs/Modulo 9/9.9.PDF"

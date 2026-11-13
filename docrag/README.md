@@ -17,7 +17,7 @@ primeira execução e depois funcionam offline. Não geramos vetores: o Copilot/
 ## Como usar (Windows)
 
 1. Dê dois cliques em `iniciar.bat`. Na primeira vez ele cria o ambiente e instala tudo (demora).
-2. Coloque os PDFs baixados do site da CCEE em `dados/entrada/` (sem renomear).
+2. Coloque os PDFs baixados do site da CCEE em `dados/entrada/` (sem renomear). Pode ser em subpastas; o mesmo PDF repetido em duas pastas só entra uma vez.
 3. No painel, clique em **Processar PDFs novos**.
 4. Aba **Documentos**: confira documento, título, versão e vigência de cada PDF e marque **Conferido**.
 5. Aba **Qualidade**: veja os avisos e falhas, página por página, comparando o texto do PDF, o texto final
