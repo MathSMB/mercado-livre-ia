@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "docrag"
+version = "0.1.0"
+description = "PDF → Markdown verificado (Docling + Marker) → chunks por seção com metadados, prontos para RAG."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["pypdfium2>=4.30"]
+
+[project.optional-dependencies]
+# Docling: licença MIT. Marker: código GPL e pesos com licença restrita a uso pessoal/pesquisa/empresa pequena
+# (ver decisão D13). Os dois rodam localmente, sem API paga; na primeira execução baixam os modelos.
+conversores = ["docling>=2.50", "marker-pdf>=1.8"]
+painel = ["streamlit>=1.48", "pandas>=2.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+docrag = "docrag.cli:main"
+
+[tool.setuptools]
+packages = ["docrag"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

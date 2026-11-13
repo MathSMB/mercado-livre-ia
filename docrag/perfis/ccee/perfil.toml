@@ -1,0 +1,62 @@
+# Perfil CCEE: Procedimentos de Comercialização (PdCs) e cadernos de Regras de Comercialização.
+# Para outro projeto, copie esta pasta, troque os tipos/regras e aponte com --perfil.
+
+nome = "Base CCEE – PdCs e Regras de Comercialização"
+descricao = "Corpus do MVP: PdC 1.6, PdC 1.8, Regras caderno 05 e caderno 09."
+
+[pastas]
+# Relativas a esta pasta do perfil. Os PDFs baixados à mão vão em "entrada".
+entrada  = "../../dados/entrada"
+trabalho = "../../dados/trabalho"
+saida    = "../../dados/saida"
+
+[conversao]
+principal   = "docling"            # texto que vai para a base (licença MIT; ver decisão D13)
+conversores = ["docling", "marker"] # o segundo é a leitura de verificação
+
+[docling]
+ocr      = false   # os PDFs da CCEE têm camada de texto; ligue só se aparecer página escaneada
+formulas = true    # transforma fórmulas em LaTeX (mais lento)
+
+[marker]
+# config = { force_ocr = false }
+
+[metadados]
+obrigatorios = ["tipo", "documento", "titulo", "versao", "vigencia_inicio"]
+
+[limiares]
+cobertura_aviso     = 0.98
+cobertura_falha     = 0.90
+concordancia_aviso  = 0.90
+concordancia_falha  = 0.70
+min_palavras_pagina = 15
+
+[chunking]
+max_palavras = 700
+min_palavras = 60
+nivel_maximo = 3
+
+# Regras para tirar os metadados das duas primeiras páginas. São só sugestões:
+# tudo precisa ser conferido no painel (ou no documentos.csv) antes de exportar.
+[[tipos]]
+nome    = "pdc"
+rotulo  = "Procedimento de Comercialização"
+detectar = ['(?is)procedimentos?\s+de\s+comercializa.{0,400}?subm[óo]dulo']
+[tipos.campos]
+documento       = '(?i)subm[óo]dulo\s+(\d+\.\d+)'
+titulo          = '(?i)subm[óo]dulo\s+\d+\.\d+\s*[-–—:]?\s*([^\r\n]{3,120})'
+versao          = '(?i)vers[ãa]o\s*(?:n[ºo°]\.?\s*)?[:\-–]?\s*(\d+(?:\.\d+)*)'
+vigencia_inicio = '(?i)vig[êe]ncia\s*(?:a partir de|desde|:)?\s*[:\-–]?\s*(\d{2}/\d{2}/\d{4})'
+ato             = '(?i)((?:REN|Resolu[çc][ãa]o\s+Normativa|Despacho)\s+(?:ANEEL\s+)?n?[ºo°]?\s*[\d.]+/\d{4})'
+
+[[tipos]]
+nome    = "regra"
+rotulo  = "Regras de Comercialização"
+conversor_principal = "docling"   # troque para "marker" se o Docling errar fórmulas (D13)
+detectar = ['(?i)regras\s+de\s+comercializa']
+[tipos.campos]
+documento       = '(?i)(?:caderno|m[óo]dulo)\s*(\d{1,2})\b'
+titulo          = '(?i)(?:caderno|m[óo]dulo)\s*\d{1,2}\s*[-–—:]?\s*([^\r\n]{3,120})'
+versao          = '(?i)vers[ãa]o\s*[:\-–]?\s*(\d{4}\.\d+\.\d+)'
+vigencia_inicio = '(?i)vig[êe]ncia\s*(?:a partir de|desde|:)?\s*[:\-–]?\s*(\d{2}/\d{2}/\d{4})'
+ato             = '(?i)((?:REN|Resolu[çc][ãa]o\s+Normativa)\s+(?:ANEEL\s+)?n?[ºo°]?\s*[\d.]+/\d{4})'

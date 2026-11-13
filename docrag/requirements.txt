@@ -1,0 +1,2 @@
+# Instala o docrag com tudo (conversores + painel). Para só a biblioteca: pip install -e .
+-e .[conversores,painel,dev]
