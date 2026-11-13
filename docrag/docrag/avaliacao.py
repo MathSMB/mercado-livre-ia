@@ -132,3 +132,47 @@ def preparar_planilha_copilot(perguntas: list[Pergunta], caminho: Path):
             linha = existentes.get(p.id, {})
             w.writerow({**{c: linha.get(c, "") for c in COLUNAS_COPILOT}, "id": p.id, "pergunta": p.pergunta,
                         "resposta_esperada": p.resposta_esperada})
+
+
+RE_FRASE = __import__("re").compile(r"(?<=[.;:])\s+|\n+")
+RE_PRAZO_FRASE = __import__("re").compile(r"\b(?:[A-Z]{1,3}\s*[+\-]\s*)?\d+\s*(?:du|d|dias?|horas?|h|meses|anos?|%)\b"
+                                          r"|\bM[SA]?\s*[+\-]\s*\d+", __import__("re").I)
+
+
+RE_ITEM_FRASE = __import__("re").compile(r"^\s*\d+(?:\.\d+)+\.?\s*")
+
+
+def teste_busca(chunks: list, top_k: int = 3, max_perguntas: int = 40) -> dict:
+    """Teste automático, sem pessoa e sem IA: para cada frase do documento que tem prazo/número de regra
+    ("até 5du", "MS+3du", "90 dias"), tira o prazo da frase e busca o resto (completa a amostra com outras
+    frases do documento, sem o número do item). O trecho de onde a frase saiu
+    precisa voltar entre os `top_k` primeiros; se não volta, o Copilot também tende a não achá-lo."""
+    textos = [getattr(c, "texto", None) or c["texto"] for c in chunks]
+    if len(textos) < 2:
+        return {"perguntas": 0, "acertos": 0, "taxa": 1.0, "erros": []}
+    indice = BM25(textos)
+    com_prazo, outras = [], []
+    for i, t in enumerate(textos):
+        for frase in RE_FRASE.split(tx.markdown_para_texto(t)):
+            frase = " ".join(frase.split())
+            if not 8 <= len(frase.split()) <= 60:
+                continue
+            if RE_PRAZO_FRASE.search(frase):
+                com_prazo.append((i, RE_PRAZO_FRASE.sub(" ", frase)))   # o prazo é a "resposta": sai da busca
+            else:
+                outras.append((i, RE_ITEM_FRASE.sub(" ", frase)))
+    # prioridade para as frases com prazo; completa com frases comuns espalhadas pelo documento
+    amostra = com_prazo[:: max(1, len(com_prazo) // max_perguntas)][:max_perguntas]
+    falta = max_perguntas - len(amostra)
+    if falta and outras:
+        amostra += outras[:: max(1, len(outras) // falta)][:falta]
+    erros = []
+    for i, consulta in amostra:
+        ordem = indice.ranking(consulta)
+        # frase repetida em mais de um chunk (ex.: cabeçalho de tabela) conta se qualquer um deles vier
+        alvos = {j for j, t in enumerate(textos) if _norm(consulta) in _norm(t)} | {i}
+        if not any(j in alvos for j in ordem[:top_k]):
+            erros.append({"frase": consulta[:160], "chunk": i + 1,
+                          "posicao": next(k for k, j in enumerate(ordem, 1) if j in alvos)})
+    n = len(amostra)
+    return {"perguntas": n, "acertos": n - len(erros), "taxa": (n - len(erros)) / n if n else 1.0, "erros": erros[:15]}

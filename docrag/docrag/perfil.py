@@ -22,13 +22,17 @@ class TipoDocumento:
     campos: dict[str, str | dict] = field(default_factory=dict)
     paginas_metadados: int = 3              # quantas páginas iniciais olhar
     conversor_principal: str | None = None  # sobrepõe o padrão do perfil
+    # campo -> regra(s) de uma segunda fonte no texto que precisa dar o MESMO valor (conferência cruzada)
+    conferir: dict[str, str | dict] = field(default_factory=dict)
+    # campo -> regex com 1 grupo aplicada ao nome do arquivo (ex. versão "v7.0" no nome)
+    arquivo: dict[str, str] = field(default_factory=dict)
 
     def casa(self, texto: str) -> bool:
         return any(re.search(p, texto) for p in self.detectar)
 
-    def extrair(self, texto: str) -> dict[str, str]:
+    def extrair(self, texto: str, regras: dict | None = None) -> dict[str, str]:
         achados = {}
-        for campo, regra in self.campos.items():
+        for campo, regra in (self.campos if regras is None else regras).items():
             if isinstance(regra, str):
                 regra = {"padrao": regra}
             trecho = texto
@@ -40,7 +44,10 @@ class TipoDocumento:
                 trecho = trecho[:m.start()] if m else trecho
             ms = list(re.finditer(regra["padrao"], trecho))
             if ms:
-                m = ms[-1] if regra.get("ocorrencia") == "ultima" else ms[0]
+                if regra.get("ocorrencia") == "maior":  # a data mais recente (dd.mm.aaaa ou dd/mm/aaaa)
+                    m = max(ms, key=lambda x: tuple(reversed(re.split(r"[./\-]", x.group(1)))))
+                else:
+                    m = ms[-1] if regra.get("ocorrencia") == "ultima" else ms[0]
                 valor = " ".join(m.group(1).split())
                 if campo.startswith("vigencia"):  # 01.07.2025 -> 01/07/2025
                     valor = re.sub(r"^(\d{2})[.\-](\d{2})[.\-](\d{4})$", r"\1/\2/\3", valor)
@@ -65,6 +72,14 @@ class Chunking:
 
 
 @dataclass
+class Automacao:
+    """O que o programa decide sozinho (ver decisão D14: conferência por exceção)."""
+    confirmar_metadados: bool = True   # metadados confirmados por conferência cruzada não pedem clique
+    auditoria_1_em: int = 50           # 1 em cada N documentos aprovados sozinhos vai para revisão humana (0 = nunca)
+    busca_minima: float = 0.8          # teste automático de busca: fração mínima de acertos no top 3
+
+
+@dataclass
 class Perfil:
     pasta: Path
     nome: str
@@ -80,6 +95,12 @@ class Perfil:
     pasta_saida: Path
     docling: dict = field(default_factory=dict)
     marker: dict = field(default_factory=dict)
+    arbitro: bool = True                 # troca página ruim do principal pela leitura que bate com o PDF
+    automacao: "Automacao" = None
+
+    def __post_init__(self):
+        if self.automacao is None:
+            self.automacao = Automacao()
 
     @property
     def banco(self) -> Path:
@@ -113,7 +134,8 @@ def carregar(pasta: str | Path) -> Perfil:
 
     tipos = [TipoDocumento(nome=t["nome"], rotulo=t.get("rotulo", t["nome"]), detectar=t.get("detectar", []),
                            campos=t.get("campos", {}), conversor_principal=t.get("conversor_principal"),
-                           paginas_metadados=t.get("paginas_metadados", 3))
+                           paginas_metadados=t.get("paginas_metadados", 3),
+                           conferir=t.get("conferir", {}), arquivo=t.get("arquivo", {}))
              for t in d.get("tipos", [])]
     conv = d.get("conversao", {})
     return Perfil(
@@ -131,4 +153,6 @@ def carregar(pasta: str | Path) -> Perfil:
         pasta_saida=caminho("saida", "dados/saida"),
         docling=d.get("docling", {}),
         marker=d.get("marker", {}),
+        arbitro=conv.get("arbitro", True),
+        automacao=Automacao(**d.get("automacao", {})),
     )

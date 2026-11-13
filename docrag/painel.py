@@ -29,7 +29,7 @@ for _p in (PERFIL.pasta_entrada, PERFIL.pasta_trabalho, PERFIL.pasta_saida):
     _p.mkdir(parents=True, exist_ok=True)  # a pasta de entrada já existe ao abrir o painel
 NOMES_ETAPA = {"importado": "Importado", "convertido": "Convertido", "verificado": "Verificado", "exportado": "Exportado"}
 ETAPAS = list(NOMES_ETAPA)
-ICONE = {"ok": "✅ OK", "aviso": "⚠️ Aviso", "falha": "❌ Falha", None: "–"}
+ICONE = {"ok": "✅ OK", "info": "ℹ️ Info", "aviso": "⚠️ Aviso", "falha": "❌ Falha", None: "–"}
 NOMES_STATUS = {"rodando": "🔄 Rodando", "ok": "✅ OK", "com_erros": "⚠️ Com erros", "falhou": "❌ Falhou",
                 "interrompida": "⏹️ Interrompida"}
 
@@ -217,9 +217,12 @@ with aba_docs:
                     if d[c] and not exportar.data(d[c]):
                         problemas.append(f"#{linha.id}: data inválida em {c} ({d[c]}). Use dd/mm/aaaa.")
                         conferido = False
-                gravar(f"UPDATE documentos SET {', '.join(c + '=?' for c in CAMPOS_METADADOS)}, metadados_ok=?, "
+                gravar(f"UPDATE documentos SET {', '.join(c + '=?' for c in CAMPOS_METADADOS)}, "
+                       "metadados_conferencia=CASE WHEN ?=1 AND metadados_ok=1 THEN metadados_conferencia "
+                       "WHEN ?=1 THEN 'pessoa' END, metadados_ok=?, "
                        "metadados_origem='painel', atualizado_em=? WHERE id=?",
-                       (*[d[c] for c in CAMPOS_METADADOS], int(conferido), agora(), int(linha.id)))
+                       (*[d[c] for c in CAMPOS_METADADOS], int(conferido), int(conferido), int(conferido), agora(),
+                        int(linha.id)))
                 original = docs[docs.id == linha.id].iloc[0]
                 metadados.salvar_no_csv(PERFIL, {**d, "arquivo": original.arquivo, "sha256": original.sha256,
                                                  "conferido": "sim" if conferido else ""})
@@ -252,11 +255,11 @@ with aba_qual:
     doc = escolher_doc("doc_qual")
     if doc:
         v = ler("SELECT codigo, nivel, pagina, mensagem, detalhe FROM verificacoes WHERE documento_id=? "
-                "ORDER BY CASE nivel WHEN 'falha' THEN 0 WHEN 'aviso' THEN 1 ELSE 2 END, pagina", (int(doc["id"]),))
+                "ORDER BY CASE nivel WHEN 'falha' THEN 0 WHEN 'aviso' THEN 1 WHEN 'info' THEN 2 ELSE 3 END, pagina", (int(doc["id"]),))
         st.markdown(f"Status do portão: **{ICONE.get(doc['status_qualidade'], '–')}**"
                     + (f" · aceito em {doc['aceito_em']}: _{doc['aceito_nota']}_" if tem(doc.get("aceito_em")) else ""))
         so_problemas = st.toggle("Só avisos e falhas", value=True)
-        vv = v[v.nivel != "ok"] if so_problemas else v
+        vv = v[v.nivel.isin(["aviso", "falha"])] if so_problemas else v
         st.dataframe(vv.assign(nivel=vv.nivel.map(ICONE))[["nivel", "pagina", "codigo", "mensagem"]], width="stretch",
                      hide_index=True, column_config={"nivel": "Nível", "pagina": "Página", "codigo": "Verificação",
                                                      "mensagem": "O que foi encontrado"})
@@ -271,7 +274,11 @@ with aba_qual:
         final = pipeline.pasta_doc(PERFIL, doc) / "final.md"
         st.markdown(f"**Para corrigir:** edite `{final}` (mantenha as marcas `<!-- página N -->`) e clique em "
                     "**Reverificar**. A correção é preservada mesmo se reconverter.")
-        if doc["status_qualidade"] in ("aviso", "falha") and not tem(doc.get("aceito_em")):
+        auditoria = doc.get("auditoria") == "pendente"
+        if auditoria:
+            st.info("🎲 Este documento passou em tudo sozinho, mas foi **sorteado para auditoria** (1 em cada "
+                    f"{PERFIL.automacao.auditoria_1_em}). Compare algumas páginas com o PDF e registre o aceite.")
+        if auditoria or (doc["status_qualidade"] in ("aviso", "falha") and not tem(doc.get("aceito_em"))):
             with st.form("aceite"):
                 nota = st.text_area("Aceitar mesmo assim: o que você conferiu?",
                                     placeholder="Ex.: conferi as págs. 4 e 7 com o PDF; o fluxograma da p. 7 foi "
@@ -280,7 +287,8 @@ with aba_qual:
                     if len(nota.strip()) < 10:
                         st.error("Escreva o que foi conferido (fica registrado no relatório de qualidade).")
                     else:
-                        gravar("UPDATE documentos SET aceito_em=?, aceito_nota=? WHERE id=?",
+                        gravar("UPDATE documentos SET aceito_em=?, aceito_nota=?, auditoria=CASE auditoria WHEN "
+                               "'pendente' THEN 'feita' ELSE auditoria END WHERE id=?",
                                (agora(), nota.strip(), int(doc["id"])))
                         st.rerun()
 

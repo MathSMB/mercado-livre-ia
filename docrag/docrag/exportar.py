@@ -146,14 +146,15 @@ def exportar(perfil, docs: list[dict], chunks_por_doc: dict[int, list[dict]], re
 
 
 def relatorio_markdown(perfil, doc: dict, verificacoes: list[dict]) -> str:
-    icone = {"ok": "✅", "aviso": "⚠️", "falha": "❌"}
+    icone = {"ok": "✅", "info": "ℹ️", "aviso": "⚠️", "falha": "❌"}
     linhas = [f"# Qualidade – {rotulo_documento(perfil, doc)}", "",
               f"- Arquivo: `{doc['arquivo']}` (sha256 {doc['sha256'][:12]}…)",
               f"- Páginas: {doc.get('paginas')}",
               f"- Status: {icone.get(doc.get('status_qualidade'), '')} {doc.get('status_qualidade')}",
-              f"- Aceite: {doc.get('aceito_em') or 'não'} {('– ' + doc['aceito_nota']) if doc.get('aceito_nota') else ''}",
+              f"- Metadados: {'confirmados automaticamente (conferência cruzada)' if doc.get('metadados_conferencia') == 'automatica' else 'conferidos por uma pessoa'}",
+              f"- Aceite: {doc.get('aceito_em') or 'não precisou' if doc.get('status_qualidade') == 'ok' and not doc.get('aceito_em') else doc.get('aceito_em') or 'não'} {('– ' + doc['aceito_nota']) if doc.get('aceito_nota') else ''}",
               "", "| Nível | Página | Verificação | Mensagem |", "| --- | --- | --- | --- |"]
-    for v in sorted(verificacoes, key=lambda v: ({"falha": 0, "aviso": 1, "ok": 2}[v["nivel"]], v["pagina"] or 0)):
+    for v in sorted(verificacoes, key=lambda v: ({"falha": 0, "aviso": 1, "info": 2, "ok": 3}[v["nivel"]], v["pagina"] or 0)):
         if v["nivel"] == "ok" and v["codigo"] == "cobertura":
             continue
         msg = v["mensagem"].replace("|", "\\|")

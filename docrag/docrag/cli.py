@@ -50,13 +50,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Documento {a.id} não existe.")
                 return 1
             if a.comando == "aceitar":
-                con.execute("UPDATE documentos SET aceito_em=?, aceito_nota=? WHERE id=?", (agora(), a.nota, a.id))
+                con.execute("UPDATE documentos SET aceito_em=?, aceito_nota=?, auditoria=CASE auditoria WHEN 'pendente' "
+                            "THEN 'feita' ELSE auditoria END WHERE id=?", (agora(), a.nota, a.id))
             else:
                 falta = metadados.faltando(perfil, dict(doc))
                 if falta:
                     print(f"Faltam metadados: {', '.join(falta)}. Preencha no painel ou no documentos.csv.")
                     return 1
-                con.execute("UPDATE documentos SET metadados_ok=1 WHERE id=?", (a.id,))
+                con.execute("UPDATE documentos SET metadados_ok=1, metadados_conferencia='pessoa' WHERE id=?", (a.id,))
                 metadados.salvar_no_csv(perfil, {**dict(doc), "conferido": "sim"})
         print("ok")
         return 0

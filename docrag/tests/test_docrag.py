@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from docrag import avaliacao, chunking, conversores, exportar, glossario, perfil as perfil_mod, pipeline, qualidade
+from docrag import (arbitro, avaliacao, chunking, conversores, exportar, glossario, metadados, perfil as perfil_mod,
+                    pipeline, qualidade)
 from docrag import texto as tx
 from docrag.banco import aberto
 
@@ -248,6 +249,8 @@ def test_pipeline_completo(perfil, monkeypatch):
         doc = dict(con.execute("SELECT * FROM documentos").fetchone())
     assert doc["documento"] == "9.9" and doc["versao"] == "2.0" and doc["status_qualidade"] == "ok"
 
+    # O PDF de teste não tem "1. INTRODUÇÃO": a segunda fonte da versão não bate, então não confirma sozinho
+    assert not doc["metadados_ok"] and doc["metadados_motivo"]
     # Sem conferir metadados, nada é exportado
     pipeline.rodar(perfil, "exportar")
     assert not (perfil.pasta_saida / "manifesto.csv").exists()
@@ -334,3 +337,112 @@ def test_premissas_em_lista_cortam_no_item_principal():
         primeira = next(l for l in c.texto.splitlines() if l.startswith("- "))
         assert re.match(r"- 3\.\d+ ", primeira), primeira   # nenhum chunk começa num subitem
         assert "(ite" in c.secao
+
+
+# --------------------------------------------------------------------------- versão 2: conferência por exceção
+CAPA = """Submódulo 1.6 – Comercialização Varejista
+Revisão 7.0
+procedimentos de
+comercialização
+Revisão Motivo da Revisão Instrumento de aprovação Data de Vigência
+1.0 Primeira versão aprovada Resolução Normativa n° 654/2015 01.04.2015
+1.1
+Adequações diversas Despacho n° 1.877/2016 19.07.2016
+7.0 Consulta Pública nº 07/2025 Resolução Normativa nº 1.174/2026 01.10.2026
+Submódulo 1.6 – Comercialização Varejista
+Revisão 7.0
+1. INTRODUÇÃO
+Texto."""
+
+
+def _doc_capa(perfil, capa=CAPA, arquivo="1.6_-_Comercializacao_varejista_v7.0.pdf"):
+    return {"arquivo": arquivo, **metadados.extrair(perfil, capa)}
+
+
+def test_metadados_confirmados_por_conferencia_cruzada(perfil):
+    doc = _doc_capa(perfil)
+    assert doc["versao"] == "7.0" and doc["vigencia_inicio"] == "01/10/2026"
+    ok, motivos = metadados.conferencia_cruzada(perfil, doc, CAPA)
+    assert ok, motivos
+
+
+def test_metadados_divergentes_vao_para_conferencia(perfil):
+    # cabeçalho diz 7.0, mas a última linha da tabela de revisões é 8.0
+    capa = CAPA.replace("7.0 Consulta", "8.0 Consulta")
+    ok, motivos = metadados.conferencia_cruzada(perfil, _doc_capa(perfil, capa), capa)
+    assert not ok and any("versao" in m for m in motivos)
+    # nome do arquivo contradiz a versão
+    ok, motivos = metadados.conferencia_cruzada(perfil, _doc_capa(perfil, arquivo="1.6_v6.0.pdf"), CAPA)
+    assert not ok and any("nome do arquivo" in m for m in motivos)
+    # tabela fora de ordem: a vigência da última linha não é a mais recente
+    capa = CAPA.replace("01.10.2026", "01.10.2014")
+    ok, motivos = metadados.conferencia_cruzada(perfil, _doc_capa(perfil, capa), capa)
+    assert not ok and any("vigencia" in m for m in motivos)
+
+
+def test_arbitro_troca_pagina_errada_pela_leitura_certa(info, perfil):
+    errado = PAG2.replace("MS+10du", "MS+12du")
+    paginas, trocas = arbitro.arbitrar(info, conv("docling", [PAG1, errado]), [conv("marker", [PAG1, PAG2])],
+                                       perfil.limiares)
+    assert paginas == [PAG1, PAG2]
+    assert [(t.pagina, t.conversor) for t in trocas] == [(2, "marker")]
+    rel = qualidade.avaliar(info, conv("docling", [PAG1, errado]), conv("marker", [PAG1, PAG2]), perfil.limiares,
+                            final_md=conversores.juntar_paginas(paginas))
+    assert rel.status == "ok"
+
+
+def test_arbitro_nao_troca_quando_as_duas_erram(info, perfil):
+    errado = PAG2.replace("MS+10du", "MS+12du")
+    paginas, trocas = arbitro.arbitrar(info, conv("docling", [PAG1, errado]), [conv("marker", [PAG1, errado])],
+                                       perfil.limiares)
+    assert paginas[1] == errado and not trocas
+
+
+def test_arbitro_recupera_tabela_achatada(info, perfil):
+    sem_tabela = PAG2.replace("|--------------|---------------|---------|\n", "")
+    paginas, trocas = arbitro.arbitrar(info, conv("docling", [PAG1, sem_tabela]), [conv("marker", [PAG1, PAG2])],
+                                       perfil.limiares)
+    assert paginas[1] == PAG2 and trocas[0].pagina == 2
+
+
+def test_info_nao_muda_status():
+    rel = qualidade.Relatorio([qualidade.Verificacao("x", qualidade.OK, ""),
+                               qualidade.Verificacao("y", qualidade.INFO, "")])
+    assert rel.status == "ok" and not rel.problemas() and rel.contagem()["info"] == 1
+
+
+def test_teste_busca_acha_o_proprio_trecho():
+    chunks = [{"texto": "## Prazos\n\nO agente deve enviar a garantia financeira até MS+5du à CCEE."},
+              {"texto": "## Cadastro\n\nO varejista atualiza o cadastro dos representados no sistema em até 10 dias."},
+              {"texto": "## Glossário\n\nVTOT é o valor total do agente no mês de apuração considerado."}]
+    r = avaliacao.teste_busca(chunks)
+    assert r["perguntas"] >= 2 and r["taxa"] == 1.0
+
+
+def test_auditoria_por_amostragem(perfil, monkeypatch):
+    monkeypatch.setattr(conversores, "converter", lambda n, c, i, p: conv(n, [PAG1, PAG2]))
+    perfil.automacao.auditoria_1_em = 1   # sorteia todos
+    perfil.pasta_entrada.mkdir(parents=True)
+    shutil.copy(PDF, perfil.pasta_entrada / "a.pdf")
+    pipeline.rodar(perfil, "processar")
+    with aberto(perfil.banco) as con:
+        con.execute("UPDATE documentos SET metadados_ok=1")
+        doc = dict(con.execute("SELECT * FROM documentos").fetchone())
+    assert doc["status_qualidade"] == "ok" and doc["auditoria"] == "pendente"
+    assert not pipeline.apto(perfil, doc)[0]
+    from docrag.cli import main
+    main(["--perfil", str(perfil.pasta), "aceitar", str(doc["id"]), "--nota", "conferi 3 páginas com o PDF"])
+    with aberto(perfil.banco) as con:
+        doc = dict(con.execute("SELECT * FROM documentos").fetchone())
+    assert doc["auditoria"] == "feita" and pipeline.apto(perfil, doc)[0]
+
+
+def test_banco_antigo_ganha_colunas_novas(tmp_path):
+    import sqlite3
+    antigo = tmp_path / "docrag.db"
+    c = sqlite3.connect(antigo)
+    c.execute("CREATE TABLE documentos (id INTEGER PRIMARY KEY, arquivo TEXT NOT NULL, sha256 TEXT NOT NULL UNIQUE)")
+    c.commit(); c.close()
+    with aberto(antigo) as con:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(documentos)")}
+    assert {"metadados_conferencia", "auditoria"} <= cols

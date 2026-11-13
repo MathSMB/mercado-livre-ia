@@ -4,8 +4,11 @@ Três leituras independentes do mesmo documento:
   1. a camada de texto do próprio PDF (o que está escrito, letra por letra);
   2. o conversor principal (o texto que vai para a base);
   3. o conversor de verificação.
-Cada verificação devolve ok, aviso (alguém precisa olhar) ou falha (não pode ir para a base
-sem correção ou aceite registrado).
+Cada verificação devolve:
+  ok     – bateu;
+  info   – há diferença, mas o PDF confirma o texto final (fica registrado, não pede nada a ninguém);
+  aviso  – alguém precisa olhar;
+  falha  – não pode ir para a base sem correção ou aceite registrado.
 """
 from __future__ import annotations
 
@@ -17,8 +20,8 @@ from difflib import SequenceMatcher
 from . import texto as tx
 from .conversores import Conversao, InfoPdf
 
-OK, AVISO, FALHA = "ok", "aviso", "falha"
-ORDEM = {OK: 0, AVISO: 1, FALHA: 2}
+OK, INFO, AVISO, FALHA = "ok", "info", "aviso", "falha"
+ORDEM = {OK: 0, INFO: 0, AVISO: 1, FALHA: 2}   # info não muda o status do documento
 RE_TITULO_NUMERADO = re.compile(r"^#{1,6}\s*\**\s*(\d+(?:\.\d+)*)\.?\s+\S", re.M)
 
 
@@ -40,16 +43,15 @@ class Relatorio:
 
     @property
     def status(self) -> str:
-        if not self.verificacoes:
-            return OK
-        return max((v.nivel for v in self.verificacoes), key=ORDEM.get)
+        pior = max((ORDEM[v.nivel] for v in self.verificacoes), default=0)
+        return {0: OK, 1: AVISO, 2: FALHA}[pior]
 
     def contagem(self) -> dict[str, int]:
         c = Counter(v.nivel for v in self.verificacoes)
-        return {OK: c[OK], AVISO: c[AVISO], FALHA: c[FALHA]}
+        return {OK: c[OK], INFO: c[INFO], AVISO: c[AVISO], FALHA: c[FALHA]}
 
     def problemas(self) -> list[Verificacao]:
-        return [v for v in self.verificacoes if v.nivel != OK]
+        return [v for v in self.verificacoes if v.nivel in (AVISO, FALHA)]
 
 
 def _nivel(valor: float, aviso: float, falha: float) -> str:
@@ -123,9 +125,8 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
                 v.append(Verificacao("sem_texto_pdf", AVISO, "O PDF não tem texto nesta página, mas a conversão tem. "
                                      "Confira à mão (pode ser OCR).", pg))
             continue
-        if imagens:
-            v.append(Verificacao("figura", AVISO, f"Página com {imagens} imagem(ns). Se for fluxograma ou tabela em "
-                                 "imagem, o conteúdo não está no texto.", pg, {"imagens": imagens}))
+        figura = Verificacao("figura", AVISO, f"Página com {imagens} imagem(ns). Se for fluxograma ou tabela em "
+                             "imagem, o conteúdo não está no texto.", pg, {"imagens": imagens}) if imagens else None
 
         # 3. Cobertura: tudo o que está escrito no PDF aparece no texto final?
         cob, faltando = tx.cobertura(ref, pal_final)
@@ -138,14 +139,18 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
             # em outro ponto do documento, nada se perdeu para a base.
             ausentes = prazos_ausentes(info.textos[i], md_final_todo_norm)
             fluxo_coberto = not ausentes
-            nivel = AVISO if fluxo_coberto else FALHA
+            nivel = INFO if fluxo_coberto else FALHA
             msg += (" Página com fluxograma desenhado: o texto do desenho não foi extraído. " +
                     ("Todos os prazos e números dele aparecem em outra parte do documento (ex.: descrição de "
-                     "atividades). Confira e aceite." if fluxo_coberto else
+                     "atividades), então nada se perdeu para a base." if fluxo_coberto else
                      f"Prazos/números do desenho que não aparecem em lugar nenhum do texto: {ausentes[:15]}. "
                      "Cole o texto do fluxograma no final.md."))
         v.append(Verificacao("cobertura", nivel, msg, pg, {"cobertura": round(cob, 4), "faltando": faltando[:25]}))
         pdf_confere = nivel == OK
+        if figura:
+            # Se o texto da página bate com o PDF, a imagem é decorativa ou o fluxograma já está coberto.
+            figura.nivel = INFO if (pdf_confere or fluxo_coberto) else AVISO
+            v.append(figura)
 
         # 4. Números: prazos, percentuais, artigos, valores. Um número a menos é erro grave.
         nums_pdf = Counter(tx.numeros(tx.sem_linhas(tx.texto_pdf(info.textos[i]), repetidas)))
@@ -154,6 +159,8 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         sobra_num = sorted((nums_final - nums_pdf).elements())
         if (falta_num or sobra_num) and not fluxo_coberto:
             pdf_confere = False
+            if figura:
+                figura.nivel = AVISO
             v.append(Verificacao("numeros", AVISO if len(falta_num) <= 2 and not sobra_num else FALHA,
                                  f"Números diferentes do PDF: faltando {falta_num[:15]}, a mais {sobra_num[:15]}.", pg,
                                  {"faltando": falta_num, "a_mais": sobra_num}))
@@ -166,20 +173,30 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         sm = SequenceMatcher(None, pal_final, pal_ver, autojunk=False)
         conc = sm.ratio() if (pal_final or pal_ver) else 1.0
         nivel = _nivel(conc, limiares.concordancia_aviso, limiares.concordancia_falha)
-        if nivel == FALHA and (pdf_confere or fluxo_coberto):
+        if nivel != OK and pdf_confere:
             # O texto final bate com o PDF (palavras e números): a diferença é da 2ª leitura ou da ordem (tabelas).
-            nivel = AVISO
+            nivel = INFO
         if nivel != OK:
             trechos = [(" ".join(pal_final[a1:a2][:20]), " ".join(pal_ver[b1:b2][:20]))
                        for op, a1, a2, b1, b2 in sm.get_opcodes() if op != "equal"][:8]
-            v.append(Verificacao("concordancia", nivel, f"Os conversores concordam em {conc:.1%} do texto.", pg,
+            v.append(Verificacao("concordancia", nivel, f"Os conversores concordam em {conc:.1%} do texto." +
+                                 (" O texto final bate com o PDF; a diferença é da outra leitura (ordem, tabela "
+                                  "ou formatação)." if nivel == INFO else ""), pg,
                                  {"concordancia": round(conc, 4), "diferencas": trechos}))
 
         # 6. Tabelas
         t_final, t_ver = tx.contar_tabelas(md_final), tx.contar_tabelas(md_ver)
         if t_final != t_ver:
-            v.append(Verificacao("tabelas", AVISO, f"Tabelas: texto final tem {t_final}, {verificador.conversor} achou "
-                                 f"{t_ver}. Confira se alguma tabela virou texto solto ou se partiu.", pg,
+            # Menos tabelas no final só é inofensivo se o mesmo conteúdo continua em tabela (ex.: a 2ª leitura
+            # partiu uma tabela em duas na quebra de página). Tabela que virou texto solto perde a relação
+            # linha x coluna, mesmo com todas as palavras presentes.
+            achatou = t_final < t_ver and tx.palavras_em_tabelas(md_final) < 0.9 * tx.palavras_em_tabelas(md_ver)
+            ok_tab = pdf_confere and not achatou
+            v.append(Verificacao("tabelas", INFO if ok_tab else AVISO,
+                                 f"Tabelas: texto final tem {t_final}, {verificador.conversor} achou {t_ver}. " +
+                                 ("O texto final bate com o PDF e o conteúdo continua em tabela (a outra leitura só "
+                                  "partiu ou juntou tabelas)." if ok_tab else
+                                  "Confira se alguma tabela virou texto solto ou se partiu."), pg,
                                  {"final": t_final, "verificador": t_ver}))
 
         # 7. Fórmulas
@@ -203,7 +220,8 @@ def avaliar(info: InfoPdf, principal: Conversao, verificador: Conversao | None, 
         tit_ver = numeros_titulos(verificador.markdown)
         so_final, so_ver = sorted(set(tit_final) - set(tit_ver)), sorted(set(tit_ver) - set(tit_final))
         if so_final or so_ver:
-            v.append(Verificacao("titulos", AVISO, "Seções numeradas diferentes entre os conversores: "
+            # Título que só o texto final tem não é perda; título que só a 2ª leitura achou pode ser.
+            v.append(Verificacao("titulos", AVISO if so_ver else INFO, "Seções numeradas diferentes entre os conversores: "
                                  f"só no texto final {so_final[:15]}, só no {verificador.conversor} {so_ver[:15]}.",
                                  detalhe={"so_final": so_final, "so_verificador": so_ver}))
     saltos = saltos_numeracao(tit_final)
