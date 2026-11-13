@@ -131,6 +131,12 @@ def visao_ao_vivo():
     ultima = ler("SELECT * FROM execucoes ORDER BY id DESC LIMIT 1")
     if not ultima.empty:
         u = ultima.iloc[0]
+        # Quando uma execução termina, recarrega a página inteira (tabelas fora deste bloco ficariam velhas).
+        versao = f"{u.id}-{u.status}"
+        anterior = st.session_state.get("versao_banco")
+        st.session_state["versao_banco"] = versao
+        if anterior is not None and anterior != versao:
+            st.rerun(scope="app")
         st.caption(f"Última execução #{u.id} · {u.comando} · {NOMES_STATUS.get(u.status, u.status)} · início {u.inicio}"
                    + (f" · fim {u.fim}" if tem(u.fim) else "")
                    + (f" · {texto_resumo(u.resumo)}" if texto_resumo(u.resumo) else ""))
@@ -188,7 +194,8 @@ with aba_docs:
         docs["portao"] = docs.status_qualidade.map(lambda s: ICONE.get(s, "–"))
         colunas = ["id", "arquivo", *CAMPOS_METADADOS, "conferido", "portao", "etapa", "pronto", "paginas", "erro"]
         editado = st.data_editor(
-            docs[colunas], width="stretch", hide_index=True, key="editor_docs",
+            # a chave muda quando o banco muda: a tabela nunca mostra dados velhos depois de uma execução
+            docs[colunas], width="stretch", hide_index=True, key=f"editor_docs_{st.session_state.get('versao_banco')}",
             disabled=["id", "arquivo", "portao", "etapa", "pronto", "paginas", "erro"],
             column_config={
                 "tipo": st.column_config.SelectboxColumn("Tipo", options=[t.nome for t in PERFIL.tipos]),
