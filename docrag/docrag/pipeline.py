@@ -25,18 +25,53 @@ def pasta_doc(perfil, doc) -> Path:
     return perfil.pasta_trabalho / "docs" / f"{doc['id']:04d}-{tx.slug(Path(doc['arquivo']).stem, 40)}"
 
 
+def processo_vivo(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":  # no Windows os.kill(pid, 0) encerraria o processo; consulta pela API
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        codigo = ctypes.c_ulong()
+        ok = k32.GetExitCodeProcess(h, ctypes.byref(codigo))
+        k32.CloseHandle(h)
+        return bool(ok) and codigo.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def execucao_em_andamento(perfil) -> bool:
+    """Há trava E o processo que a criou ainda está vivo (trava de execução que caiu não conta)."""
+    arq = perfil.pasta_trabalho / ".rodando"
+    try:
+        pid = int(arq.read_text(encoding="utf-8").strip() or 0)
+    except (FileNotFoundError, ValueError):
+        return False
+    return processo_vivo(pid)
+
+
 class Trava:
-    """Impede duas execuções ao mesmo tempo (ex.: dois cliques no painel)."""
+    """Impede duas execuções ao mesmo tempo (ex.: dois cliques no painel). Trava velha é limpa sozinha."""
 
     def __init__(self, perfil):
+        self.perfil = perfil
         self.arquivo = perfil.pasta_trabalho / ".rodando"
 
     def __enter__(self):
         self.arquivo.parent.mkdir(parents=True, exist_ok=True)
+        if self.arquivo.exists() and not execucao_em_andamento(self.perfil):
+            self.arquivo.unlink(missing_ok=True)
         try:
             fd = os.open(self.arquivo, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
-            raise SystemExit(f"Já há uma execução em andamento ({self.arquivo}). Se não houver, apague esse arquivo.")
+            raise SystemExit(f"Já há uma execução em andamento ({self.arquivo}).")
         os.write(fd, str(os.getpid()).encode())
         os.close(fd)
         return self
@@ -283,6 +318,7 @@ def avaliar(perfil, con, ex: Execucao, top_k: int = 5) -> dict:
 # --------------------------------------------------------------------------- orquestração
 def rodar(perfil, comando: str, forcar: bool = False, ids: list[int] | None = None) -> int:
     with Trava(perfil), aberto(perfil.banco) as con:
+        con.execute("UPDATE execucoes SET status='interrompida', fim=? WHERE status='rodando'", (agora(),))
         ex = Execucao(con, comando + (" --forcar" if forcar else "") + (f" --ids {ids}" if ids else ""))
         resumo: dict = {}
         try:

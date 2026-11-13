@@ -30,7 +30,8 @@ for _p in (PERFIL.pasta_entrada, PERFIL.pasta_trabalho, PERFIL.pasta_saida):
 NOMES_ETAPA = {"importado": "Importado", "convertido": "Convertido", "verificado": "Verificado", "exportado": "Exportado"}
 ETAPAS = list(NOMES_ETAPA)
 ICONE = {"ok": "✅ OK", "aviso": "⚠️ Aviso", "falha": "❌ Falha", None: "–"}
-NOMES_STATUS = {"rodando": "🔄 Rodando", "ok": "✅ OK", "com_erros": "⚠️ Com erros", "falhou": "❌ Falhou"}
+NOMES_STATUS = {"rodando": "🔄 Rodando", "ok": "✅ OK", "com_erros": "⚠️ Com erros", "falhou": "❌ Falhou",
+                "interrompida": "⏹️ Interrompida"}
 
 
 def ler(sql: str, params=()) -> pd.DataFrame:
@@ -64,7 +65,7 @@ def texto_resumo(r) -> str:
 
 
 def em_andamento() -> bool:
-    return (PERFIL.pasta_trabalho / ".rodando").exists()
+    return pipeline.execucao_em_andamento(PERFIL)
 
 
 def disparar(args: list[str]) -> Path:
@@ -72,9 +73,9 @@ def disparar(args: list[str]) -> Path:
     log = PASTA_LOGS / f"execucao_{datetime.now():%Y%m%d_%H%M%S}.log"
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
     with open(log, "w", encoding="utf-8") as f:
-        subprocess.Popen([sys.executable, "-m", "docrag", "--perfil", str(PERFIL.pasta), *args], cwd=RAIZ,
+        subprocess.Popen([sys.executable, "-X", "utf8", "-m", "docrag", "--perfil", str(PERFIL.pasta), *args], cwd=RAIZ,
                          stdout=f, stderr=subprocess.STDOUT, creationflags=flags,
-                         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
     return log
 
 

@@ -291,3 +291,28 @@ def test_importa_pdfs_de_subpastas(perfil, monkeypatch):
     assert pipeline.rodar(perfil, "processar") == 0
     with aberto(perfil.banco) as con:
         assert con.execute("SELECT arquivo FROM documentos").fetchone()[0] == "PdCs/Modulo 9/9.9.PDF"
+
+
+def test_trava_velha_e_limpa_sozinha(perfil, monkeypatch):
+    monkeypatch.setattr(conversores, "converter", lambda n, c, i, p: conv(n, [PAG1, PAG2]))
+    perfil.pasta_trabalho.mkdir(parents=True)
+    (perfil.pasta_trabalho / ".rodando").write_text("999999", encoding="utf-8")  # processo que não existe mais
+    assert not pipeline.execucao_em_andamento(perfil)
+    assert pipeline.rodar(perfil, "processar") == 0
+    assert not (perfil.pasta_trabalho / ".rodando").exists()
+
+
+def test_marker_falhando_nao_derruba_documento(perfil, monkeypatch):
+    def falso(nome, caminho, info, perfil):
+        if nome == "marker":
+            raise UnicodeDecodeError("charmap", b"\\x81", 0, 1, "character maps to <undefined>")
+        return conv(nome, [PAG1, PAG2])
+    monkeypatch.setattr(conversores, "converter", falso)
+    perfil.pasta_entrada.mkdir(parents=True)
+    shutil.copy(PDF, perfil.pasta_entrada / "a.pdf")
+    pipeline.rodar(perfil, "processar")
+    with aberto(perfil.banco) as con:
+        doc = con.execute("SELECT etapa, status_qualidade FROM documentos").fetchone()
+        avisos = [r[0] for r in con.execute("SELECT codigo FROM verificacoes WHERE nivel='aviso'")]
+    assert doc["etapa"] == "verificado" and doc["status_qualidade"] == "aviso"
+    assert "segunda_leitura" in avisos
