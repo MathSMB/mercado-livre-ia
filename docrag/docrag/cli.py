@@ -1,5 +1,6 @@
 """Linha de comando.
 
+    python -m docrag esteira            # tudo de uma vez: importa (PDF e ZIP), converte, confere e publica
     python -m docrag processar [--perfil perfis/ccee] [--forcar] [--ids 1 2]
     python -m docrag verificar          # refaz portão e chunks sem reconverter (após corrigir final.md)
     python -m docrag exportar           # monta a pasta do SharePoint
@@ -29,9 +30,9 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="docrag", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--perfil", default=PERFIL_PADRAO, help="pasta do perfil (padrão: perfis/ccee)")
     sub = ap.add_subparsers(dest="comando", required=True)
-    for nome in ("importar", "processar", "verificar", "exportar", "avaliar"):
+    for nome in ("esteira", "importar", "processar", "verificar", "exportar", "avaliar"):
         p = sub.add_parser(nome)
-        if nome in ("processar", "verificar"):
+        if nome in ("processar", "verificar", "esteira"):
             p.add_argument("--ids", type=int, nargs="*", help="só estes documentos")
         if nome == "processar":
             p.add_argument("--forcar", action="store_true", help="reconverte mesmo o que já foi convertido")
@@ -50,13 +51,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Documento {a.id} não existe.")
                 return 1
             if a.comando == "aceitar":
-                con.execute("UPDATE documentos SET aceito_em=?, aceito_nota=? WHERE id=?", (agora(), a.nota, a.id))
+                con.execute("UPDATE documentos SET aceito_em=?, aceito_nota=?, auditoria=CASE auditoria WHEN 'pendente' "
+                            "THEN 'feita' ELSE auditoria END WHERE id=?", (agora(), a.nota, a.id))
             else:
                 falta = metadados.faltando(perfil, dict(doc))
                 if falta:
                     print(f"Faltam metadados: {', '.join(falta)}. Preencha no painel ou no documentos.csv.")
                     return 1
-                con.execute("UPDATE documentos SET metadados_ok=1 WHERE id=?", (a.id,))
+                con.execute("UPDATE documentos SET metadados_ok=1, metadados_conferencia='pessoa' WHERE id=?", (a.id,))
                 metadados.salvar_no_csv(perfil, {**dict(doc), "conferido": "sim"})
         print("ok")
         return 0

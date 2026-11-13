@@ -36,8 +36,14 @@ max_palavras = 700
 min_palavras = 60
 nivel_maximo = 3
 
-# Regras para tirar os metadados das duas primeiras páginas. São só sugestões:
-# tudo precisa ser conferido no painel (ou no documentos.csv) antes de exportar.
+# Regras para tirar os metadados das primeiras páginas. Metadados que passam na conferência cruzada
+# (abaixo) ficam confirmados sozinhos; os outros vão para conferência no painel.
+# O que o programa decide sozinho (decisão D14: conferência por exceção).
+[automacao]
+confirmar_metadados = true  # metadados que passam na conferência cruzada não pedem clique
+auditoria_1_em      = 50    # 1 em cada 50 documentos aprovados sozinhos é sorteado para revisão humana
+busca_minima        = 0.8   # teste automático de busca: pelo menos 80% das frases com prazo acham o trecho certo
+
 [[tipos]]
 nome    = "pdc"
 rotulo  = "Procedimento de Comercialização"
@@ -50,6 +56,15 @@ titulo    = '(?i)subm[óo]dulo\s+\d+\.\d+\s*[-–—]\s*([^\r\n]+?)\s*[\r\n]+\s*
 versao    = '(?i)revis[ãa]o\s+(\d+\.\d+)'
 vigencia_inicio = { padrao = '(\d{2}[./]\d{2}[./]\d{4})', ocorrencia = "ultima", depois_de = '(?i)data\s+de\s+vig[êe]ncia', antes_de = '(?m)^\s*1\.\s*INTRODU' }
 ato       = { padrao = '((?:Resolu[çc][ãa]o\s+Normativa|REN|Despacho)\s+(?:ANEEL\s+)?n?\s*[ºo°]?\s*[\d.]+/\d{4})', ocorrencia = "ultima", depois_de = '(?i)data\s+de\s+vig[êe]ncia', antes_de = '(?m)^\s*1\.\s*INTRODU' }
+# Conferência cruzada: uma segunda fonte que precisa dar o mesmo valor. Se tudo bater, os metadados
+# ficam confirmados sozinhos (sem clique); se algo divergir, o documento vai para "Precisa de você".
+[tipos.conferir]
+versao          = { padrao = '(?m)^\s*(\d+\.\d+)\s', ocorrencia = "ultima", depois_de = '(?i)data\s+de\s+vig[êe]ncia', antes_de = '(?m)^\s*1\.\s*INTRODU' }
+vigencia_inicio = { padrao = '(\d{2}[./]\d{2}[./]\d{4})', ocorrencia = "maior", depois_de = '(?i)data\s+de\s+vig[êe]ncia', antes_de = '(?m)^\s*1\.\s*INTRODU' }
+# O nome do arquivo baixado da CCEE traz o submódulo e a versão (ex. "1.6 - ..._v7.0.pdf"). Se não trouxer, é ignorado.
+[tipos.arquivo]
+documento = '^(\d+\.\d+)'
+versao    = '(?i)v(\d+\.\d+)\.pdf$'
 
 [[tipos]]
 nome    = "regra"

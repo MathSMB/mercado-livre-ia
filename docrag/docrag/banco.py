@@ -93,6 +93,12 @@ CREATE TABLE IF NOT EXISTS avaliacoes (
 );
 """
 
+COLUNAS_NOVAS = {
+    "metadados_conferencia": "TEXT",   # automatica (conferência cruzada) | pessoa
+    "metadados_motivo": "TEXT",        # por que a conferência automática não confirmou
+    "auditoria": "TEXT",               # pendente (sorteado para revisão humana) | feita
+}
+
 CAMPOS_METADADOS = ["tipo", "documento", "titulo", "versao", "vigencia_inicio", "vigencia_fim", "ato"]
 
 
@@ -106,6 +112,12 @@ def conectar(caminho: Path) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(ESQUEMA)
+    # Colunas novas (versão 2): bancos antigos ganham as colunas sem perder nada.
+    existentes = {r[1] for r in con.execute("PRAGMA table_info(documentos)")}
+    for coluna, tipo in COLUNAS_NOVAS.items():
+        if coluna not in existentes:
+            con.execute(f"ALTER TABLE documentos ADD COLUMN {coluna} {tipo}")
+    con.commit()
     return con
 
 

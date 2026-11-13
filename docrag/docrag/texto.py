@@ -66,6 +66,25 @@ def contar_tabelas(md: str) -> int:
     return len(RE_SEPARADOR_TABELA.findall(md)) + len(re.findall(r"<table\b", md, re.I))
 
 
+def palavras_em_tabelas(md: str) -> int:
+    """Palavras que estão dentro de tabelas Markdown válidas (bloco de linhas "|" com linha separadora)."""
+    total, bloco = 0, []
+
+    def fecha():
+        nonlocal total
+        if any(RE_SEPARADOR_TABELA.match(l) for l in bloco):
+            total += len(palavras(markdown_para_texto("\n".join(bloco))))
+        bloco.clear()
+
+    for linha in md.splitlines():
+        if linha.strip().startswith("|"):
+            bloco.append(linha)
+        else:
+            fecha()
+    fecha()
+    return total
+
+
 def cobertura(referencia: list[str], conversao: list[str]) -> tuple[float, list[str]]:
     """Fração das palavras da referência (com repetição) que aparecem na conversão."""
     ref, conv = Counter(referencia), Counter(conversao)

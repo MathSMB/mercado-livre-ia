@@ -4,6 +4,9 @@ saida/
   sharepoint/                 <- suba esta pasta inteira numa biblioteca do SharePoint
     <tipo>/<documento>_v<versão>/0001-<seção>.md
     glossario.md
+  notebooklm/                 <- um arquivo por documento vigente (para o NotebookLM, limite de 50 fontes)
+    pdc-1-6_v7-0.md
+    glossario.md
   outras-versoes/             <- versões não vigentes hoje (não suba junto, para o Copilot não misturar)
   manifesto.csv               <- uma linha por chunk, com os metadados (serve para colunas do SharePoint)
   glossario.csv
@@ -78,6 +81,19 @@ def texto_chunk(perfil, doc: dict, ch: dict) -> str:
     return f"---\n{fm}\n---\n\n{cabecalho(perfil, doc, ch)}\n\n{ch['texto'].strip()}\n"
 
 
+def documento_unico(perfil, doc: dict, chunks: list[dict]) -> str:
+    """O documento inteiro num arquivo só (para o NotebookLM): cabeçalho com os metadados e, antes de cada
+    seção, a mesma linha de contexto dos chunks, para a resposta citar documento, versão, seção e página."""
+    linhas = [f"# {rotulo_documento(perfil, doc)}", ""]
+    for rotulo, chave in (("Versão", "versao"), ("Vigência a partir de", "vigencia_inicio"),
+                          ("Vigência até", "vigencia_fim"), ("Aprovado por", "ato"), ("Arquivo de origem", "arquivo")):
+        if doc.get(chave):
+            linhas.append(f"- {rotulo}: {doc[chave]}")
+    for ch in chunks:
+        linhas += ["", "---", "", f"> {cabecalho(perfil, doc, ch)}", "", ch["texto"].strip()]
+    return "\n".join(linhas) + "\n"
+
+
 def vigente(doc: dict, hoje: date | None = None) -> bool:
     hoje = hoje or date.today()
     ini, fim = data(doc.get("vigencia_inicio")), data(doc.get("vigencia_fim"))
@@ -110,9 +126,9 @@ def chunk_id(doc: dict, ch: dict) -> str:
 def exportar(perfil, docs: list[dict], chunks_por_doc: dict[int, list[dict]], relatorios: dict[int, str],
              hoje: date | None = None) -> dict:
     saida = perfil.pasta_saida
-    sp, outras = saida / "sharepoint", saida / "outras-versoes"
+    sp, outras, nb = saida / "sharepoint", saida / "outras-versoes", saida / "notebooklm"
     # A pasta de saída é gerada por inteiro a cada exportação (nada nela é editado à mão).
-    for p in (sp, outras, saida / "relatorios"):
+    for p in (sp, outras, nb, saida / "relatorios"):
         if p.exists():
             shutil.rmtree(p)
         p.mkdir(parents=True)
@@ -135,6 +151,9 @@ def exportar(perfil, docs: list[dict], chunks_por_doc: dict[int, list[dict]], re
                 "parte": f"{ch.get('parte', 1)}/{ch.get('de_partes', 1)}", "palavras": ch.get("palavras"),
                 "pdf_origem": doc.get("arquivo"), "pdf_sha256": doc.get("sha256"),
             })
+        if doc["id"] in vig:
+            (nb / f"{pasta_documento(doc).replace('/', '-')}.md").write_text(
+                documento_unico(perfil, doc, chunks_por_doc.get(doc["id"], [])), encoding="utf-8")
         if doc["id"] in relatorios:
             (saida / "relatorios" / f"qualidade-{pasta_documento(doc).replace('/', '-')}.md").write_text(
                 relatorios[doc["id"]], encoding="utf-8")
@@ -146,14 +165,15 @@ def exportar(perfil, docs: list[dict], chunks_por_doc: dict[int, list[dict]], re
 
 
 def relatorio_markdown(perfil, doc: dict, verificacoes: list[dict]) -> str:
-    icone = {"ok": "✅", "aviso": "⚠️", "falha": "❌"}
+    icone = {"ok": "✅", "info": "ℹ️", "aviso": "⚠️", "falha": "❌"}
     linhas = [f"# Qualidade – {rotulo_documento(perfil, doc)}", "",
               f"- Arquivo: `{doc['arquivo']}` (sha256 {doc['sha256'][:12]}…)",
               f"- Páginas: {doc.get('paginas')}",
               f"- Status: {icone.get(doc.get('status_qualidade'), '')} {doc.get('status_qualidade')}",
-              f"- Aceite: {doc.get('aceito_em') or 'não'} {('– ' + doc['aceito_nota']) if doc.get('aceito_nota') else ''}",
+              f"- Metadados: {'confirmados automaticamente (conferência cruzada)' if doc.get('metadados_conferencia') == 'automatica' else 'conferidos por uma pessoa'}",
+              f"- Aceite: {doc.get('aceito_em') or 'não precisou' if doc.get('status_qualidade') == 'ok' and not doc.get('aceito_em') else doc.get('aceito_em') or 'não'} {('– ' + doc['aceito_nota']) if doc.get('aceito_nota') else ''}",
               "", "| Nível | Página | Verificação | Mensagem |", "| --- | --- | --- | --- |"]
-    for v in sorted(verificacoes, key=lambda v: ({"falha": 0, "aviso": 1, "ok": 2}[v["nivel"]], v["pagina"] or 0)):
+    for v in sorted(verificacoes, key=lambda v: ({"falha": 0, "aviso": 1, "info": 2, "ok": 3}[v["nivel"]], v["pagina"] or 0)):
         if v["nivel"] == "ok" and v["codigo"] == "cobertura":
             continue
         msg = v["mensagem"].replace("|", "\\|")

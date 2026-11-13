@@ -8,7 +8,7 @@ import shutil
 import traceback
 from pathlib import Path
 
-from . import avaliacao, chunking, conversores, exportar, glossario, metadados, qualidade
+from . import arbitro, avaliacao, chunking, conversores, exportar, glossario, metadados, qualidade
 from . import texto as tx
 from .banco import CAMPOS_METADADOS, Execucao, aberto, agora
 
@@ -81,12 +81,46 @@ class Trava:
 
 
 # --------------------------------------------------------------------------- importar
+def abrir_zips(perfil, ex: Execucao | None = None) -> int:
+    """ZIP baixado da CCEE na pasta de entrada: extrai os PDFs numa pasta ao lado, com o nome do ZIP.
+    Só extrai uma vez (a pasta existir basta). Caminhos perigosos dentro do ZIP são ignorados."""
+    import zipfile
+    n = 0
+    for z in sorted(perfil.pasta_entrada.rglob("*.zip"), key=lambda p: str(p).lower()):
+        destino = z.with_suffix("")
+        if destino.exists():
+            continue
+        try:
+            with zipfile.ZipFile(z) as arq:
+                for item in arq.infolist():
+                    nome = Path(item.filename)
+                    if item.is_dir() or nome.suffix.lower() != ".pdf" or nome.is_absolute() or ".." in nome.parts:
+                        continue
+                    alvo = destino / nome
+                    alvo.parent.mkdir(parents=True, exist_ok=True)
+                    with arq.open(item) as orig, open(alvo, "wb") as dest:
+                        shutil.copyfileobj(orig, dest)
+                    n += 1
+            destino.mkdir(exist_ok=True)
+            if ex:
+                ex.evento("info", f"ZIP aberto: {z.name} → {destino.name}/")
+        except zipfile.BadZipFile:
+            if ex:
+                ex.evento("erro", f"{z.name}: o ZIP está corrompido ou incompleto. Baixe de novo.")
+    return n
+
+
+def pdfs_na_entrada(perfil) -> list[Path]:
+    return sorted((p for p in perfil.pasta_entrada.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"),
+                  key=lambda p: str(p).lower())
+
+
 def importar(perfil, con, ex: Execucao) -> list[int]:
     perfil.pasta_entrada.mkdir(parents=True, exist_ok=True)
+    abrir_zips(perfil, ex)
     novos = []
     # Lê também as subpastas: pode jogar as pastas organizadas inteiras em "entrada".
-    pdfs = [p for p in perfil.pasta_entrada.rglob("*") if p.is_file() and p.suffix.lower() == ".pdf"]
-    for pdf in sorted(pdfs, key=lambda p: str(p).lower()):
+    for pdf in pdfs_na_entrada(perfil):
         nome = pdf.relative_to(perfil.pasta_entrada).as_posix()   # ex. "PdCs/Modulo 1/1.6.pdf"
         h = sha256(pdf)
         if con.execute("SELECT 1 FROM documentos WHERE sha256=?", (h,)).fetchone():
@@ -139,6 +173,26 @@ def reextrair_metadados(perfil, con, ex: Execucao, doc):
         ex.evento("info", f"{doc['arquivo']}: metadados atualizados {novos}.", doc["id"])
 
 
+def confirmar_metadados(perfil, con, ex: Execucao, doc):
+    """Conferência cruzada: se a segunda fonte e o nome do arquivo batem, os metadados ficam confirmados sozinhos."""
+    if doc["metadados_ok"] or not perfil.automacao.confirmar_metadados:
+        return
+    tipo = perfil.tipo(doc["tipo"])
+    n = tipo.paginas_metadados if tipo else 3
+    texto = "\n".join(conversores.ler_pdf(pasta_doc(perfil, doc) / "original.pdf").textos[:n])
+    ok, motivos = metadados.conferencia_cruzada(perfil, dict(doc), texto)
+    if ok:
+        con.execute("UPDATE documentos SET metadados_ok=1, metadados_conferencia='automatica', metadados_motivo=NULL "
+                    "WHERE id=?", (doc["id"],))
+        ex.evento("info", f"{doc['arquivo']}: metadados confirmados automaticamente (versão {doc['versao']}, "
+                          f"vigência {doc['vigencia_inicio']}): cabeçalho, tabela de revisões e nome do arquivo batem.",
+                  doc["id"])
+    else:
+        con.execute("UPDATE documentos SET metadados_motivo=? WHERE id=?", ("; ".join(motivos), doc["id"]))
+        ex.evento("aviso", f"{doc['arquivo']}: metadados precisam de conferência: {'; '.join(motivos)}.", doc["id"])
+    con.commit()
+
+
 # --------------------------------------------------------------------------- converter
 def _ja_convertido(con, doc_id: int, conversor: str) -> bool:
     return con.execute("SELECT 1 FROM conversoes WHERE documento_id=? AND conversor=?", (doc_id, conversor)).fetchone() is not None
@@ -189,22 +243,34 @@ def _ler_conversao(pasta: Path, nome: str) -> conversores.Conversao | None:
     return conversores.Conversao(nome, "", conversores.separar_paginas(arq.read_text(encoding="utf-8")))
 
 
-def texto_final(perfil, con, ex: Execucao, doc) -> str | None:
-    """final.md = cópia do principal, a não ser que alguém tenha corrigido à mão (aí é preservado)."""
+def texto_final(perfil, con, ex: Execucao, doc, info=None) -> tuple[str | None, list]:
+    """final.md = melhor leitura de cada página (árbitro), a não ser que alguém tenha corrigido à mão."""
     pasta = pasta_doc(perfil, doc)
-    principal = doc["conversor_principal"] or perfil.principal_para(doc["tipo"])
-    arq_principal, arq_final = pasta / f"{principal}.md", pasta / "final.md"
-    if not arq_principal.exists():
-        return None
+    principal_nome = doc["conversor_principal"] or perfil.principal_para(doc["tipo"])
+    arq_final = pasta / "final.md"
+    principal = _ler_conversao(pasta, principal_nome)
+    if principal is None:
+        return None, []
     if arq_final.exists():
         atual = hashlib.sha256(arq_final.read_bytes()).hexdigest()
         if doc["final_sha256"] and atual != doc["final_sha256"]:
             ex.evento("info", f"{doc['arquivo']}: usando final.md corrigido à mão.", doc["id"])
-            return arq_final.read_text(encoding="utf-8")
-    shutil.copyfile(arq_principal, arq_final)
+            return arq_final.read_text(encoding="utf-8"), []
+    paginas, trocas = principal.paginas, []
+    outras = [c for c in (_ler_conversao(pasta, n) for n in perfil.conversores if n != principal_nome) if c]
+    if perfil.arbitro and outras:
+        info = info or conversores.ler_pdf(pasta / "original.pdf")
+        paginas, trocas = arbitro.arbitrar(info, principal, outras, perfil.limiares)
+    arq_final.write_text(conversores.juntar_paginas(paginas), encoding="utf-8")
     con.execute("UPDATE documentos SET final_sha256=? WHERE id=?",
                 (hashlib.sha256(arq_final.read_bytes()).hexdigest(), doc["id"]))
-    return arq_final.read_text(encoding="utf-8")
+    return arq_final.read_text(encoding="utf-8"), trocas
+
+
+def sorteado_auditoria(perfil, doc) -> bool:
+    """Sorteio determinístico (pelo sha256 do PDF): o mesmo documento é sempre sorteado ou não."""
+    n = perfil.automacao.auditoria_1_em
+    return bool(n) and int(doc["sha256"][:12], 16) % n == 0
 
 
 def verificar(perfil, con, ex: Execucao, doc) -> str | None:
@@ -217,8 +283,12 @@ def verificar(perfil, con, ex: Execucao, doc) -> str | None:
         return None
     outros = [c for c in perfil.conversores if c != principal_nome]
     verificador = next((v for v in (_ler_conversao(pasta, c) for c in outros) if v), None)
-    final = texto_final(perfil, con, ex, doc)
+    final, trocas = texto_final(perfil, con, ex, doc, info)
     rel = qualidade.avaliar(info, principal, verificador, perfil.limiares, final_md=final)
+    for t in trocas:
+        rel.verificacoes.append(qualidade.Verificacao(
+            "arbitro", qualidade.INFO, f"Usei a leitura do {t.conversor} nesta página: {t.motivo}", t.pagina,
+            {"conversor": t.conversor}))
     if verificador is None and outros:
         rel.verificacoes.append(qualidade.Verificacao("segunda_leitura", qualidade.AVISO,
                                                       "Sem a conversão de verificação: o portão ficou só com o PDF."))
@@ -234,6 +304,18 @@ def verificar(perfil, con, ex: Execucao, doc) -> str | None:
                     " parte, de_partes, texto) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                     [(doc["id"], ch.ordem, ch.secao, ch.numero, json.dumps(ch.caminho, ensure_ascii=False),
                       ch.pagina_inicio, ch.pagina_fim, ch.palavras, ch.parte, ch.de_partes, ch.texto) for ch in lista])
+    # Teste automático de busca: frases com prazo/número precisam achar o próprio trecho
+    busca = avaliacao.teste_busca(lista)
+    if busca["perguntas"]:
+        bom = busca["taxa"] >= perfil.automacao.busca_minima
+        msg = (f"Teste automático de busca: {busca['acertos']} de {busca['perguntas']} frases do documento (prioridade para as com prazo) acharam o "
+               f"trecho certo entre os 3 primeiros ({busca['taxa']:.0%}).")
+        if not bom:
+            msg += " Abaixo do mínimo: os chunks podem estar grandes, mal cortados ou repetitivos."
+        v = qualidade.Verificacao("busca", qualidade.INFO if bom else qualidade.AVISO, msg, detalhe=busca)
+        rel.verificacoes.append(v)
+        con.execute("INSERT INTO verificacoes (documento_id, codigo, nivel, pagina, mensagem, detalhe) VALUES (?,?,?,?,?,?)",
+                    (doc["id"], v.codigo, v.nivel, None, v.mensagem, json.dumps(v.detalhe, ensure_ascii=False)))
     # Aceite antigo deixa de valer se o resultado mudou
     anterior, aceite = con.execute("SELECT status_qualidade, aceito_em FROM documentos WHERE id=?", (doc["id"],)).fetchone()
     con.execute("UPDATE documentos SET etapa='verificado', status_qualidade=?, atualizado_em=?, "
@@ -245,10 +327,49 @@ def verificar(perfil, con, ex: Execucao, doc) -> str | None:
     nivel = "info" if rel.status == "ok" else "aviso"
     ex.evento(nivel, f"{doc['arquivo']}: portão {rel.status.upper()} ({n['falha']} falha(s), {n['aviso']} aviso(s)); "
                      f"{len(lista)} chunks.", doc["id"])
+    if rel.status == "ok" and sorteado_auditoria(perfil, doc) and doc["auditoria"] != "feita":
+        con.execute("UPDATE documentos SET auditoria='pendente' WHERE id=?", (doc["id"],))
+        con.commit()
+        ex.evento("aviso", f"{doc['arquivo']}: sorteado para auditoria (1 em cada {perfil.automacao.auditoria_1_em}). "
+                           "Passou em tudo sozinho, mas uma pessoa confere por amostragem para medir se o "
+                           "portão continua confiável.", doc["id"])
     if aceite and anterior != rel.status:
         ex.evento("aviso", f"{doc['arquivo']}: status mudou de {anterior} para {rel.status}; o aceite anterior foi "
                            "descartado e precisa ser refeito.", doc["id"])
     return rel.status
+
+
+def corrigir_pagina(perfil, doc, pagina: int, texto: str):
+    """Troca o texto de uma página no final.md (correção feita na tela). Fica preservada como correção à mão."""
+    arq = pasta_doc(perfil, doc) / "final.md"
+    paginas = conversores.separar_paginas(arq.read_text(encoding="utf-8"))
+    paginas[pagina - 1] = texto.strip("\n")
+    arq.write_text(conversores.juntar_paginas(paginas), encoding="utf-8")
+
+
+def pendencias(perfil, con) -> list[dict]:
+    """O que precisa de uma pessoa, documento por documento, já em palavras simples."""
+    itens = []
+    for d in con.execute("SELECT * FROM documentos ORDER BY tipo, documento, versao").fetchall():
+        d = dict(d)
+        if d.get("erro"):
+            itens.append({"doc": d, "tipo": "erro", "texto": d["erro"]})
+            continue
+        if d["etapa"] in ("importado", "convertido"):
+            continue  # ainda na esteira
+        if not d["metadados_ok"]:
+            itens.append({"doc": d, "tipo": "metadados",
+                          "texto": d.get("metadados_motivo") or "os metadados ainda não foram conferidos"})
+        if d["status_qualidade"] in ("aviso", "falha") and not d["aceito_em"]:
+            vs = [dict(v) for v in con.execute(
+                "SELECT * FROM verificacoes WHERE documento_id=? AND nivel IN ('aviso','falha') "
+                "ORDER BY CASE nivel WHEN 'falha' THEN 0 ELSE 1 END, pagina", (d["id"],))]
+            itens.append({"doc": d, "tipo": "qualidade", "verificacoes": vs,
+                          "texto": f"{len(vs)} ponto(s) que nenhuma das leituras resolveu sozinha"})
+        if d.get("auditoria") == "pendente":
+            itens.append({"doc": d, "tipo": "auditoria",
+                          "texto": f"sorteado para auditoria (1 em cada {perfil.automacao.auditoria_1_em})"})
+    return itens
 
 
 # --------------------------------------------------------------------------- exportar
@@ -262,6 +383,8 @@ def apto(perfil, doc) -> tuple[bool, str]:
         return False, "metadados não conferidos"
     if doc["status_qualidade"] != "ok" and not doc["aceito_em"]:
         return False, f"portão com {doc['status_qualidade']} sem aceite"
+    if doc.get("auditoria") == "pendente":
+        return False, "sorteado para auditoria: falta uma pessoa conferir e aceitar"
     return True, ""
 
 
@@ -293,12 +416,14 @@ def exportar_tudo(perfil, con, ex: Execucao) -> dict:
     entradas = glossario.montar(perfil, fontes)
     glossario.escrever(entradas, perfil.pasta_saida / "sharepoint" / "glossario.md",
                        perfil.pasta_saida / "glossario.csv", perfil.nome)
+    shutil.copyfile(perfil.pasta_saida / "sharepoint" / "glossario.md", perfil.pasta_saida / "notebooklm" / "glossario.md")
     con.executemany("UPDATE documentos SET etapa='exportado', atualizado_em=? WHERE id=?",
                     [(agora(), d["id"]) for d in aptos])
     con.commit()
     res["glossario"] = len(entradas)
     ex.evento("info", f"Exportados {res['chunks']} chunks de {res['vigentes']} documento(s) vigente(s) para "
-                      f"{res['pasta']}; glossário com {len(entradas)} entradas.")
+                      f"{res['pasta']}; glossário com {len(entradas)} entradas. Para o NotebookLM: "
+                      f"{res['vigentes'] + 1} arquivo(s) em {perfil.pasta_saida / 'notebooklm'} (um por documento + glossário).")
     return res
 
 
@@ -338,22 +463,26 @@ def rodar(perfil, comando: str, forcar: bool = False, ids: list[int] | None = No
         ex = Execucao(con, comando + (" --forcar" if forcar else "") + (f" --ids {ids}" if ids else ""))
         resumo: dict = {}
         try:
-            if comando in ("importar", "processar"):
+            if comando in ("importar", "processar", "esteira"):
                 resumo["importados"] = len(importar(perfil, con, ex))
-            if comando in ("processar", "verificar"):
+            if comando in ("processar", "verificar", "esteira"):
                 sql = "SELECT * FROM documentos" + (f" WHERE id IN ({','.join('?' * len(ids))})" if ids else "")
                 for doc in con.execute(sql + " ORDER BY id", ids or []).fetchall():
-                    if comando == "processar" and not converter(perfil, con, ex, doc, forcar):
+                    if comando == "esteira" and not ids and doc["etapa"] in ("verificado", "exportado"):
+                        continue  # na esteira automática, o que já foi conferido não é refeito
+                    if comando in ("processar", "esteira") and not converter(perfil, con, ex, doc, forcar):
                         continue
                     doc = con.execute("SELECT * FROM documentos WHERE id=?", (doc["id"],)).fetchone()
                     reextrair_metadados(perfil, con, ex, doc)
+                    doc = con.execute("SELECT * FROM documentos WHERE id=?", (doc["id"],)).fetchone()
+                    confirmar_metadados(perfil, con, ex, doc)
                     doc = con.execute("SELECT * FROM documentos WHERE id=?", (doc["id"],)).fetchone()
                     if doc["etapa"] == "importado":
                         continue
                     st = verificar(perfil, con, ex, doc)
                     if st:
                         resumo[st] = resumo.get(st, 0) + 1
-            if comando == "exportar":
+            if comando in ("exportar", "esteira"):
                 resumo.update(exportar_tudo(perfil, con, ex))
             if comando == "avaliar":
                 resumo.update(avaliar(perfil, con, ex))

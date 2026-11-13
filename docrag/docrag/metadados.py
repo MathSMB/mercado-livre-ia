@@ -53,3 +53,45 @@ def salvar_no_csv(perfil, valores: dict[str, str]):
 
 def faltando(perfil, doc: dict) -> list[str]:
     return [c for c in perfil.campos_obrigatorios if not (doc.get(c) or "").strip()]
+
+
+def data_valida(valor: str) -> bool:
+    from datetime import datetime
+    try:
+        datetime.strptime(valor, "%d/%m/%Y")
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def conferencia_cruzada(perfil, doc: dict, texto_inicio: str) -> tuple[bool, list[str]]:
+    """Confirma os metadados sem pessoa: cada campo com regra em [tipos.conferir] precisa dar o mesmo valor
+    por uma segunda fonte do texto, o nome do arquivo não pode contradizer, as datas precisam ser válidas e
+    os obrigatórios precisam estar preenchidos. Devolve (confirmado, motivos legíveis)."""
+    from pathlib import PurePosixPath
+    import re
+
+    tipo = perfil.tipo(doc.get("tipo"))
+    if not tipo:
+        return False, ["tipo de documento não reconhecido"]
+    motivos = []
+    falta = faltando(perfil, doc)
+    if falta:
+        motivos.append(f"faltam {', '.join(falta)}")
+    for campo in ("vigencia_inicio", "vigencia_fim"):
+        if (doc.get(campo) or "").strip() and not data_valida(doc[campo]):
+            motivos.append(f"{campo} '{doc[campo]}' não é uma data válida")
+    if not tipo.conferir:
+        motivos.append("o perfil não tem regra de conferência cruzada para este tipo")
+    segunda = tipo.extrair(texto_inicio, tipo.conferir)
+    for campo in tipo.conferir:
+        if campo not in segunda:
+            motivos.append(f"não achei a segunda fonte de {campo}")
+        elif (doc.get(campo) or "") != segunda[campo]:
+            motivos.append(f"{campo}: '{doc.get(campo)}' no cabeçalho, mas '{segunda[campo]}' na segunda fonte")
+    nome = PurePosixPath(doc.get("arquivo") or "").name
+    for campo, padrao in tipo.arquivo.items():
+        m = re.search(padrao, nome)
+        if m and m.group(1) != (doc.get(campo) or ""):
+            motivos.append(f"{campo}: '{doc.get(campo)}' no texto, mas '{m.group(1)}' no nome do arquivo")
+    return not motivos, motivos

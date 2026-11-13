@@ -17,16 +17,20 @@ primeira execução e depois funcionam offline. Não geramos vetores: o Copilot/
 ## Como usar (Windows)
 
 1. Dê dois cliques em `iniciar.bat`. Na primeira vez ele cria o ambiente e instala tudo (demora).
-2. Coloque os PDFs baixados do site da CCEE em `dados/entrada/` (sem renomear). Pode ser em subpastas; o mesmo PDF repetido em duas pastas só entra uma vez.
-3. No painel, clique em **Processar PDFs novos**.
-4. Aba **Documentos**: confira documento, título, versão e vigência de cada PDF e marque **Conferido**.
-5. Aba **Qualidade**: veja os avisos e falhas, página por página, comparando o texto do PDF, o texto final
-   e a segunda leitura. Corrija `final.md` à mão se precisar e clique em **Reverificar**, ou registre o aceite
-   dizendo o que conferiu.
-6. **Exportar para o SharePoint** e suba a pasta `dados/saida/sharepoint/` numa biblioteca do SharePoint.
-7. Aba **Perguntas de teste**: escreva perguntas com a resposta certa e rode o teste.
+2. Jogue os PDFs (ou o ZIP baixado da CCEE) em `dados/entrada/`, com ou sem subpastas. Não precisa renomear.
+3. Pronto: com a **esteira automática** ligada, o painel percebe os arquivos novos em até 10 segundos, lê
+   (Docling + Marker), confere, gera os trechos e publica o pacote sozinho. Cada PDF leva uns 5 minutos.
+4. O painel tem 4 telas:
+   - **Esteira**: o resumo (na esteira, precisa de você, publicados, acerto do teste de busca) e a lista de documentos;
+   - **Precisa de você**: só as exceções, com a imagem da página do PDF ao lado do texto. Corrija ali mesmo
+     ("Salvar correção e conferir de novo") ou aceite com uma nota;
+   - **Pacote pronto**: `dados/saida/notebooklm/` (um arquivo por documento) e `dados/saida/sharepoint/`
+     (um arquivo por seção), com o passo a passo e o botão de abrir a pasta;
+   - **Detalhes**: tudo o que o programa decidiu, com filtros, mais as ferramentas avançadas (metadados, trechos,
+     glossário, perguntas de teste, registro de execuções).
+5. **Atualizar programa** (canto de cima) faz o `git pull` por você.
 
-Pela linha de comando: `python -m docrag processar | verificar | exportar | avaliar | conferir ID | aceitar ID --nota "..."`.
+Pela linha de comando: `python -m docrag esteira | processar | verificar | exportar | avaliar | conferir ID | aceitar ID --nota "..."`.
 
 ## O portão de qualidade
 
@@ -40,9 +44,24 @@ Pela linha de comando: `python -m docrag processar | verificar | exportar | aval
 | fórmulas | quantidade e escrita das fórmulas LaTeX nas duas leituras | aviso |
 | títulos | seções numeradas encontradas nas duas leituras e saltos na numeração (3.1 → 3.3) | aviso |
 | figuras | páginas com imagem (fluxogramas não viram texto) | aviso |
+| busca | teste automático: frases do documento (com o prazo apagado) precisam achar o próprio trecho no top 3 | aviso < 80% |
 
 Um documento só é exportado com portão **OK** ou com **aceite registrado**, e com os metadados conferidos.
 Se o resultado do portão mudar depois do aceite, o aceite é descartado. Os limites ficam no `perfil.toml`.
+
+### Conferência por exceção (sem IA, só regras)
+
+- **Árbitro página a página:** quando a página do conversor principal não bate com o PDF (palavras ou números)
+  e a do outro conversor bate, o texto final usa a do outro. Também troca quando o principal achatou uma tabela
+  que o outro manteve. Fica registrado como `info` ("usei a leitura do marker nesta página").
+- **Nível `info`:** diferença que o PDF já confirma (os conversores discordam, mas o texto final bate com o PDF;
+  fluxograma cujos prazos estão todos na descrição de atividades). Fica no relatório, não pede nada a ninguém.
+- **Metadados confirmados sozinhos:** a versão do cabeçalho precisa ser igual à da última linha da tabela de
+  revisões, a vigência precisa ser a data mais recente da tabela e o nome do arquivo (ex. `_v7.0.pdf`) não pode
+  contradizer. Se algo divergir, o motivo aparece e uma pessoa confere.
+- **Auditoria por amostragem:** 1 em cada 50 documentos aprovados sozinhos é sorteado (sempre o mesmo, pelo
+  sha256) para uma pessoa conferir. Mede se o portão continua confiável conforme o volume cresce.
+- Tudo isso se liga e desliga no `perfil.toml` (`[conversao] arbitro`, `[automacao]`).
 
 ## Os chunks
 
