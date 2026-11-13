@@ -1,4 +1,4 @@
-dados/
+/dados/
 .venv/
 __pycache__/
 *.pyc
