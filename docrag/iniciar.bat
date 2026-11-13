@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+if not exist "dados\entrada" mkdir "dados\entrada"
 if not exist ".venv\Scripts\python.exe" (
   echo Criando ambiente Python pela primeira vez. A instalacao do Docling e do Marker demora alguns minutos...
   py -3.12 -m venv .venv 2>nul || py -3 -m venv .venv 2>nul || python -m venv .venv

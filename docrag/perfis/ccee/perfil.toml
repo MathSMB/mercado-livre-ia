@@ -2,7 +2,7 @@
 # Para outro projeto, copie esta pasta, troque os tipos/regras e aponte com --perfil.
 
 nome = "Base CCEE – PdCs e Regras de Comercialização"
-descricao = "Corpus do MVP: PdC 1.6, PdC 1.8, Regras caderno 05 e caderno 09."
+descricao = "Corpus do MVP: PdC 1.6 e PdC 1.8 (Regras entram depois)."
 
 [pastas]
 # Relativas a esta pasta do perfil. Os PDFs baixados à mão vão em "entrada".

@@ -25,6 +25,8 @@ st.set_page_config(page_title="docrag – Conversão e chunking", page_icon="�
 
 PERFIL = perfil_mod.carregar(os.environ.get("DOCRAG_PERFIL", PERFIL_PADRAO))
 PASTA_LOGS = PERFIL.pasta_trabalho / "logs"
+for _p in (PERFIL.pasta_entrada, PERFIL.pasta_trabalho, PERFIL.pasta_saida):
+    _p.mkdir(parents=True, exist_ok=True)  # a pasta de entrada já existe ao abrir o painel
 NOMES_ETAPA = {"importado": "Importado", "convertido": "Convertido", "verificado": "Verificado", "exportado": "Exportado"}
 ETAPAS = list(NOMES_ETAPA)
 ICONE = {"ok": "✅ OK", "aviso": "⚠️ Aviso", "falha": "❌ Falha", None: "–"}
