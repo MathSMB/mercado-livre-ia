@@ -1,4 +1,4 @@
-"""Importa PDFs baixados à mão do site da CCEE (o site bloqueia coleta automática).
+"""Importa os PDFs baixados à mão do site da CCEE (o site bloqueia acesso automatizado).
 
 Coloque os arquivos em dados/entrada/ (ou passe outra pasta) e rode
     python -m ccee.pipeline importar
@@ -17,12 +17,19 @@ import zipfile
 from pathlib import Path
 
 from . import config, db
-from .download import ASSINATURAS, nome_seguro
+from urllib.parse import unquote
 
 RX_REGRA = re.compile(r"^(\d{2})\s*-\s*(.+?)_(\d{4}\.\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)
 RX_PDC = re.compile(r"^(?:subm[oó]dulo[\s_]*)?(\d{1,2}\.\d{1,2})[\s_\-–]+(.+?)[\s_\-]+v(?:ers[aã]o[\s_]*)?(\d+\.\d+)",
                     re.IGNORECASE)
 EXTENSOES = {".pdf": "PDF", ".zip": "ZIP"}
+ASSINATURAS = {"PDF": b"%PDF", "ZIP": b"PK"}
+
+
+def nome_seguro(nome: str) -> str:
+    nome = unquote(nome).strip().replace("/", "_").replace("\\", "_")
+    nome = re.sub(r'[<>:"|?*\x00-\x1f]', "_", nome)
+    return nome[:150] or "arquivo"
 
 
 def identificar(nome: str) -> dict:

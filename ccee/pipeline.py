@@ -1,13 +1,11 @@
-"""Linha de comando do coletor.
+"""Linha de comando da base CCEE.
 
-    python -m ccee.pipeline descobrir     # lê o site e atualiza o catálogo
-    python -m ccee.pipeline baixar        # baixa o que está pendente (retoma de onde parou)
-    python -m ccee.pipeline tudo          # descobrir + baixar
-    python -m ccee.pipeline importar      # cataloga os PDFs baixados à mão em dados/entrada
+    python -m ccee.pipeline importar      # cataloga os PDFs/ZIPs baixados à mão em dados/entrada
+    python -m ccee.pipeline importar --pasta C:\\Downloads\\ccee
     python -m ccee.pipeline status        # resumo no terminal
 
-Opções: --todos (inclui histórico e itens fora do escopo no download),
-        --limite N (baixa no máximo N arquivos), --reprocessar-erros
+O site da CCEE bloqueia acesso automatizado (HTTP 403), então os arquivos são baixados
+pelo navegador e este comando faz o resto. Ver D10 no registro de decisões.
 """
 from __future__ import annotations
 
@@ -18,9 +16,6 @@ from collections import Counter
 from pathlib import Path
 
 from . import config, db
-from .descoberta import descobrir_pdcs, descobrir_regras
-from .download import baixar
-from .http import Cliente
 from .importar import importar_pasta
 
 
@@ -74,81 +69,18 @@ def _marcar_interrompidas(con):
     con.commit()
 
 
-def etapa_descobrir(con, cliente, exec_id, log) -> Counter:
-    c = Counter()
-    for nome, func in (("Regras", descobrir_regras), ("PdCs", descobrir_pdcs)):
-        try:
-            docs = func(cliente)
-        except Exception as e:  # noqa: BLE001
-            db.evento(con, exec_id, "erro", f"Falha ao ler a página de {nome}: {e}")
-            log(f"ERRO ao ler {nome}: {e}")
-            c["falhas_fonte"] += 1
-            continue
-        with db.transacao(con):
-            for d in docs:
-                c[db.registrar_descoberta(con, exec_id, d)] += 1
-                if d.get("alerta") and d.get("selecionado"):
-                    db.evento(con, exec_id, "aviso", d["alerta"], d["id"])
-        sel = sum(d["selecionado"] for d in docs)
-        db.evento(con, exec_id, "info", f"{nome}: {len(docs)} itens no site, {sel} selecionados para o corpus")
-        log(f"{nome}: {len(docs)} itens no site, {sel} selecionados")
-        c[f"itens_{nome.lower()}"] = len(docs)
-        c[f"selecionados_{nome.lower()}"] = sel
-    return c
-
-
-def etapa_baixar(con, cliente, exec_id, log, todos=False, limite=None, reprocessar_erros=False) -> Counter:
-    c = Counter()
-    filtro = "" if todos else "AND selecionado=1"
-    filtro_erro = "" if reprocessar_erros else "AND erro IS NULL"
-    pendentes = con.execute(
-        f"SELECT * FROM documentos WHERE etapa='descoberto' {filtro} {filtro_erro} ORDER BY fonte, codigo"
-    ).fetchall()
-    if limite:
-        pendentes = pendentes[:limite]
-    log(f"{len(pendentes)} arquivo(s) para baixar")
-    for i, linha in enumerate(pendentes, 1):
-        doc = dict(linha)
-        try:
-            r = baixar(cliente, doc)
-            con.execute(
-                "UPDATE documentos SET etapa='baixado', erro=NULL, caminho_local=?, sha256=?, tamanho_bytes=?,"
-                " nome_arquivo=COALESCE(nome_arquivo, ?), tentativas=tentativas+1, atualizado_em=? WHERE id=?",
-                (r["caminho"], r["sha256"], r["tamanho_bytes"], r["nome_arquivo"], db.agora(), doc["id"]),
-            )
-            con.commit()
-            c["baixados"] += 1
-            log(f"[{i}/{len(pendentes)}] ok  {doc['titulo'][:70]}")
-        except Exception as e:  # noqa: BLE001
-            con.execute(
-                "UPDATE documentos SET erro=?, tentativas=tentativas+1, atualizado_em=? WHERE id=?",
-                (str(e)[:500], db.agora(), doc["id"]),
-            )
-            con.commit()
-            db.evento(con, exec_id, "erro", f"Falha no download: {e}", doc["id"])
-            c["erros"] += 1
-            log(f"[{i}/{len(pendentes)}] ERRO {doc['titulo'][:60]}: {e}")
-    return c
-
-
-def executar(comando: str, todos=False, limite=None, reprocessar_erros=False, log=print, pasta=None) -> int:
+def executar(comando: str = "importar", pasta: Path | None = None, log=print) -> int:
     con = db.conectar()
     with Trava():
         _marcar_interrompidas(con)
-        exec_id = db.iniciar_execucao(con, comando + (" --todos" if todos else ""))
-        cliente = None if comando == "importar" else Cliente()
+        exec_id = db.iniciar_execucao(con, comando)
         resumo: Counter = Counter()
         status = "ok"
         try:
-            if comando in ("descobrir", "tudo"):
-                resumo += etapa_descobrir(con, cliente, exec_id, log)
-            if comando in ("baixar", "tudo"):
-                resumo += etapa_baixar(con, cliente, exec_id, log, todos, limite, reprocessar_erros)
-            if comando == "importar":
-                destino = pasta or config.PASTA_ENTRADA
-                destino.mkdir(parents=True, exist_ok=True)
-                resumo += importar_pasta(con, exec_id, destino, log)
-            if resumo.get("erros") or resumo.get("falhas_fonte"):
+            destino = pasta or config.PASTA_ENTRADA
+            destino.mkdir(parents=True, exist_ok=True)
+            resumo += importar_pasta(con, exec_id, destino, log)
+            if resumo.get("erros"):
                 status = "com_erros"
         except KeyboardInterrupt:
             status = "interrompida"
@@ -173,18 +105,14 @@ def status_texto() -> str:
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="python -m ccee.pipeline", description="Coletor da base CCEE")
-    ap.add_argument("comando", choices=["descobrir", "baixar", "tudo", "importar", "status"])
-    ap.add_argument("--todos", action="store_true", help="baixa também histórico e itens fora do escopo")
-    ap.add_argument("--limite", type=int, help="baixa no máximo N arquivos")
-    ap.add_argument("--reprocessar-erros", action="store_true", help="tenta de novo os que falharam")
+    ap = argparse.ArgumentParser(prog="python -m ccee.pipeline", description="Base CCEE")
+    ap.add_argument("comando", choices=["importar", "status"])
     ap.add_argument("--pasta", help="pasta com os PDFs para importar (padrão: dados/entrada)")
     a = ap.parse_args(argv)
     if a.comando == "status":
         print(status_texto())
         return 0
-    return executar(a.comando, a.todos, a.limite, a.reprocessar_erros, log=lambda m: print(m, flush=True),
-                    pasta=Path(a.pasta) if a.pasta else None)
+    return executar(a.comando, Path(a.pasta) if a.pasta else None, log=lambda m: print(m, flush=True))
 
 
 if __name__ == "__main__":

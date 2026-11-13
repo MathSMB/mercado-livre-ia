@@ -3,47 +3,46 @@
 Base de conhecimento de IA sobre os Procedimentos de Comercialização (PdCs) e as Regras de
 Comercialização da CCEE (mercado livre de energia). O desenvolvimento acontece por pull requests.
 
-## Fase 1 · Coletor de PdCs e Regras
+## Fase 1 · Catálogo de PdCs e Regras
 
-Coleta os **Procedimentos de Comercialização (PdCs)** e as **Regras de Comercialização** do site da CCEE,
-guarda o histórico num banco local (SQLite) e mostra tudo num painel no navegador. Roda no seu computador,
-sem servidor e sem custo.
+Guarda os **Procedimentos de Comercialização (PdCs)** e as **Regras de Comercialização** da CCEE num banco local
+(SQLite), com versão, hash e histórico, e mostra tudo num painel no navegador. Roda no seu computador, sem
+servidor e sem custo.
+
+O site da CCEE bloqueia acesso automatizado (HTTP 403 em todo o domínio), então **os arquivos são baixados
+pelo navegador** e o painel faz o resto. Ver D10 no registro de decisões.
 
 ### Como usar (Windows)
 
 1. Instale o Python 3.11 ou mais novo (https://www.python.org/downloads/, marque "Add Python to PATH").
-2. Dê dois cliques em **`iniciar.bat`**. Na primeira vez ele cria o ambiente e instala as dependências
-   (alguns minutos). Depois abre o painel no navegador em http://localhost:8501.
-3. No painel, clique em **Descobrir + baixar**.
-
-> **Importante (nov/2026):** o site da CCEE responde **403 (proibido)** a programas automáticos, então
-> **Descobrir** e **Baixar** podem falhar. Nesse caso, baixe os PDFs pelo seu navegador (sem renomear),
-> coloque em `dados\entrada\` e clique em **📥 Importar PDFs da pasta**. O coletor não tenta contornar
-> o bloqueio.
+2. Baixe pelo navegador, **sem renomear**:
+   - **Regras:** https://www.ccee.org.br/mercado/regras-de-comercializacao → selecione os cadernos vigentes →
+     botão **Download das Regras** (vem um ZIP).
+   - **PdCs:** https://www.ccee.org.br/mercado/procedimentos-de-comercializacao → em cada aba de módulo,
+     **Acesse o PdC**. A versão mostrada nas abas de módulo é a vigente; *Futuros* e *Provisórios* ficam à parte.
+3. Coloque os arquivos em `dados\entrada\`.
+4. Rode `.\iniciar.bat` (na primeira vez ele cria o ambiente e instala as dependências) e clique em
+   **📥 Importar PDFs da pasta**.
 
 Pelo terminal (opcional):
 
 ```bat
 .venv\Scripts\activate
-python -m ccee.pipeline descobrir        :: lê o site e atualiza o catálogo
-python -m ccee.pipeline baixar           :: baixa os pendentes (retoma de onde parou)
-python -m ccee.pipeline tudo             :: as duas coisas
-python -m ccee.pipeline importar         :: cataloga os PDFs que você pôs em dados\entrada
-python -m ccee.pipeline status           :: resumo
-python -m ccee.pipeline baixar --todos   :: inclui histórico (≈1.000 arquivos)
+python -m ccee.pipeline importar                  :: cataloga o que está em dados\entrada
+python -m ccee.pipeline importar --pasta C:\x    :: ou de outra pasta
+python -m ccee.pipeline status                    :: resumo
 ```
 
-### O que ele faz
+### O que a importação faz
 
 | Etapa | Como |
 | --- | --- |
-| Descobrir Regras | Usa a mesma API JSON que a página de Regras usa para listar os cadernos (≈1.066 itens, com histórico). |
-| Descobrir PdCs | Lê o HTML da página de PdCs: módulos 1 a 9, provisórios e futuros. |
-| Selecionar o corpus | **Regras:** caderno em PDF cujo período de vigência cobre o mês atual (se houver dois, fica o publicado por último). **PdCs:** submódulos das abas de módulo. Provisórios, futuros e histórico ficam catalogados, mas não são baixados por padrão. |
-| Baixar | Uma requisição a cada 2 s, 3 tentativas, confere se o arquivo é mesmo PDF/ZIP, grava de forma atômica e calcula SHA-256. |
-| Detectar mudanças | Se a URL ou o hash publicado mudarem, o documento volta para "Encontrado" e é baixado de novo. O arquivo antigo continua no disco. |
-| Retomar | Cada etapa só processa o que falta. Se cair no meio, rode de novo. Execuções interrompidas ficam marcadas no histórico. |
-| Alertas | Inconsistências do próprio site, por exemplo um título que diz "Versão 7.0" com link para o arquivo v6.0. |
+| Identificar | Lê caderno/submódulo e versão pelo nome do arquivo, como o site publica (`05 - Contratos_2026.6.4_JUN.pdf`, `1.6_-_Comercializacao_varejista_v6.0.pdf`). Nome não reconhecido vira alerta. |
+| Conferir | Recusa arquivo que não é PDF/ZIP de verdade (ex.: página de erro salva com extensão .pdf). |
+| ZIP | Abre o ZIP do botão *Download das Regras* e importa cada PDF de dentro. |
+| Guardar | Copia para `dados/pdf/<fonte>/<código>/<sha8>_<arquivo>` e calcula SHA-256. |
+| Versões | Reimportar o mesmo arquivo não duplica. Versão nova substitui no catálogo e a antiga continua no disco. |
+| Histórico | Cada importação fica registrada (execuções e eventos), com os erros visíveis no painel. |
 
 ### Onde ficam os dados
 
@@ -52,20 +51,11 @@ dados/
   pdf/regras/<caderno>/<sha8>_<arquivo>.pdf
   pdf/pdc/<submódulo>/<sha8>_<arquivo>.pdf
   pipeline.db      ← catálogo, execuções e eventos (abra com DB Browser for SQLite, se quiser)
-  logs/            ← saída de cada coleta disparada pelo painel
+  entrada/         ← onde você coloca os PDFs/ZIPs baixados
+  logs/            ← saída de cada importação disparada pelo painel
 ```
 
 Para guardar os dados em outro lugar, defina a variável de ambiente `BASE_CCEE_DADOS`.
-
-### Automatizar (opcional)
-
-No **Agendador de Tarefas** do Windows, crie uma tarefa semanal que execute:
-
-```
-<pasta do projeto>\.venv\Scripts\python.exe -m ccee.pipeline tudo
-```
-
-com "Iniciar em" apontando para a pasta do projeto. O painel mostra o que mudou desde a última coleta.
 
 ### Testes
 

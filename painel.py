@@ -2,7 +2,7 @@
 
 Rodar:  streamlit run painel.py
 O painel só lê o banco e dispara o coletor em segundo plano; fechar o navegador
-não interrompe uma coleta em andamento.
+não interrompe uma importação em andamento.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import streamlit as st
 
 from ccee import config, db
 
-st.set_page_config(page_title="Base CCEE – Coletor", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Base CCEE", page_icon="⚡", layout="wide")
 
 PASTA_LOGS = config.DADOS / "logs"
 NOMES_ETAPA = {
@@ -74,31 +74,11 @@ with st.sidebar:
     st.header("Ações")
     rodando = em_andamento()
     if rodando:
-        st.info("Há uma coleta em andamento. Os botões voltam quando ela terminar.")
-    escopo_todos = st.checkbox("Incluir histórico e itens fora do escopo", value=False,
-                               help="Por padrão só baixa os documentos vigentes selecionados para o corpus.")
-    extra = ["--todos"] if escopo_todos else []
-    c1, c2 = st.columns(2)
-    if c1.button("🔎 Descobrir", disabled=rodando, width="stretch",
-                 help="Lê as páginas da CCEE e atualiza o catálogo (não baixa nada)."):
-        st.session_state["log"] = str(disparar(["descobrir"]))
-        st.rerun()
-    if c2.button("⬇️ Baixar", disabled=rodando, width="stretch",
-                 help="Baixa os pendentes. Se cair no meio, rode de novo: continua de onde parou."):
-        st.session_state["log"] = str(disparar(["baixar", *extra]))
-        st.rerun()
-    if st.button("▶️ Descobrir + baixar", disabled=rodando, width="stretch", type="primary"):
-        st.session_state["log"] = str(disparar(["tudo", *extra]))
-        st.rerun()
-    if st.button("🔁 Tentar de novo os que falharam", disabled=rodando, width="stretch"):
-        st.session_state["log"] = str(disparar(["baixar", "--reprocessar-erros", *extra]))
-        st.rerun()
-
-    st.divider()
+        st.info("Há uma importação em andamento. Os botões voltam quando ela terminar.")
     st.caption("Importar PDFs baixados à mão")
-    st.markdown(f"O site da CCEE bloqueia coleta automática (HTTP 403). Baixe os arquivos pelo seu navegador, "
-                f"sem renomear, e coloque em `{config.PASTA_ENTRADA}`.")
-    if st.button("📥 Importar PDFs da pasta", disabled=rodando, width="stretch"):
+    st.markdown(f"Baixe os arquivos pelo seu navegador nas páginas da CCEE (links abaixo), sem renomear, "
+                f"e coloque em `{config.PASTA_ENTRADA}`. ZIP do botão *Download das Regras* também vale.")
+    if st.button("📥 Importar PDFs da pasta", disabled=rodando, width="stretch", type="primary"):
         config.PASTA_ENTRADA.mkdir(parents=True, exist_ok=True)
         st.session_state["log"] = str(disparar(["importar"]))
         st.rerun()
@@ -110,7 +90,7 @@ with st.sidebar:
 
 
 # ------------------------------------------------------------------ Conteúdo
-st.title("Base CCEE · Coletor de PdCs e Regras")
+st.title("Base CCEE · PdCs e Regras de Comercialização")
 
 
 def mostrar_log():
@@ -119,7 +99,7 @@ def mostrar_log():
         logs = sorted(PASTA_LOGS.glob("coleta_*.log")) if PASTA_LOGS.exists() else []
         log = str(logs[-1]) if logs else None
     if log and Path(log).exists():
-        with st.expander("Saída da coleta atual / última", expanded=em_andamento()):
+        with st.expander("Saída da importação atual / última", expanded=em_andamento()):
             linhas = Path(log).read_text(encoding="utf-8", errors="replace").splitlines()
             st.code("\n".join(linhas[-25:]) or "(aguardando saída...)", language=None)
 
@@ -135,25 +115,25 @@ def visao_ao_vivo():
         erros_exec = ler("SELECT mensagem FROM eventos WHERE execucao_id=? AND nivel='erro' ORDER BY id LIMIT 5",
                          (int(u.id),))
         if not erros_exec.empty and u.status != "rodando":
-            st.error("A última coleta teve erros:\n\n" + "\n\n".join(f"- {m}" for m in erros_exec.mensagem))
+            st.error("A última execução teve erros:\n\n" + "\n\n".join(f"- {m}" for m in erros_exec.mensagem))
     mostrar_log()
 
     docs = ler("SELECT * FROM documentos")
     if docs.empty:
-        st.info("Catálogo vazio. Clique em **Descobrir** na barra lateral para ler o site da CCEE.")
+        st.info("Catálogo vazio. Baixe os PDFs da CCEE, coloque em `dados/entrada` e clique em **Importar PDFs da pasta**.")
         return
     sel = docs[docs.selecionado == 1]
     baixados = int((sel.etapa != "descoberto").sum())
     erros = int(sel.erro.notna().sum())
     alertas = int(sel.alerta.notna().sum())
     m = st.columns(5)
-    m[0].metric("No catálogo (site)", len(docs))
+    m[0].metric("No catálogo", len(docs))
     m[1].metric("Selecionados p/ corpus", len(sel))
-    m[2].metric("Baixados", f"{baixados}/{len(sel)}")
+    m[2].metric("Importados", f"{baixados}/{len(sel)}")
     m[3].metric("Com erro", erros)
     m[4].metric("Com alerta", alertas)
     if len(sel):
-        st.progress(baixados / len(sel), text=f"Progresso do download: {baixados} de {len(sel)}")
+        st.progress(baixados / len(sel), text=f"Importados: {baixados} de {len(sel)}")
 
     # Funil por etapa e fonte
     pivot = (
@@ -205,7 +185,7 @@ with aba_docs:
                            "catalogo_ccee.csv", "text/csv")
 
 with aba_alertas:
-    st.caption("Inconsistências do site (ex.: título com uma versão e link para outra) e falhas de download. "
+    st.caption("Inconsistências do site (ex.: título com uma versão e link para outra) e falhas de importação. "
                "Nada aqui é corrigido automaticamente: revise antes de seguir para a conversão.")
     a = ler("SELECT fonte, codigo, titulo, versao, alerta, erro, tentativas, url FROM documentos "
             "WHERE selecionado=1 AND (alerta IS NOT NULL OR erro IS NOT NULL) ORDER BY erro IS NULL, fonte, codigo")

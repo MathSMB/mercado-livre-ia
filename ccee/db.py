@@ -119,7 +119,7 @@ def evento(con, execucao_id, nivel: str, mensagem: str, documento_id: str | None
     con.commit()
 
 
-# Campos que vêm do site (a descoberta pode atualizá-los a cada rodada)
+# Campos de identificação do documento (atualizados a cada importação)
 CAMPOS_SITE = [
     "fonte", "codigo", "titulo", "versao", "versao_arquivo", "vigencia_inicio", "vigencia_fim",
     "situacao_site", "tipo_documento", "grupo", "ato_aneel", "ato_url", "url", "nome_arquivo",
@@ -159,6 +159,6 @@ def registrar_descoberta(con, execucao_id: int, doc: dict) -> str:
         [*params, *([ts] if mudou_algo else []), doc["id"]],
     )
     if mudou_arquivo:
-        evento(con, execucao_id, "mudanca", "Arquivo publicado mudou no site; será baixado de novo", doc["id"])
+        evento(con, execucao_id, "mudanca", "Arquivo novo para este documento; a versão anterior fica no histórico", doc["id"])
         return "alterado"
     return "alterado" if mudou_algo else "igual"
