@@ -349,12 +349,14 @@ def exportar_tudo(perfil, con, ex: Execucao) -> dict:
     entradas = glossario.montar(perfil, fontes)
     glossario.escrever(entradas, perfil.pasta_saida / "sharepoint" / "glossario.md",
                        perfil.pasta_saida / "glossario.csv", perfil.nome)
+    shutil.copyfile(perfil.pasta_saida / "sharepoint" / "glossario.md", perfil.pasta_saida / "notebooklm" / "glossario.md")
     con.executemany("UPDATE documentos SET etapa='exportado', atualizado_em=? WHERE id=?",
                     [(agora(), d["id"]) for d in aptos])
     con.commit()
     res["glossario"] = len(entradas)
     ex.evento("info", f"Exportados {res['chunks']} chunks de {res['vigentes']} documento(s) vigente(s) para "
-                      f"{res['pasta']}; glossário com {len(entradas)} entradas.")
+                      f"{res['pasta']}; glossário com {len(entradas)} entradas. Para o NotebookLM: "
+                      f"{res['vigentes'] + 1} arquivo(s) em {perfil.pasta_saida / 'notebooklm'} (um por documento + glossário).")
     return res
 
 

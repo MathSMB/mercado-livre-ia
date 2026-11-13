@@ -266,6 +266,10 @@ def test_pipeline_completo(perfil, monkeypatch):
     with open(perfil.pasta_saida / "manifesto.csv", encoding="utf-8-sig") as f:
         linhas = list(csv.DictReader(f))
     assert len(linhas) == len(arquivos) - 1
+    nb = sorted(p.name for p in (perfil.pasta_saida / "notebooklm").iterdir())
+    assert nb == ["glossario.md", "pdc-9-9_v2-0.md"]
+    unico = (perfil.pasta_saida / "notebooklm" / "pdc-9-9_v2-0.md").read_text(encoding="utf-8")
+    assert "- Versão: 2.0" in unico and "seção 2 PREMISSAS > 2.1 Prazos" in unico and "MS+10du" in unico
 
     # Correção à mão no final.md é preservada ao reverificar
     final = pipeline.pasta_doc(perfil, doc) / "final.md"
